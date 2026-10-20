@@ -45,6 +45,7 @@ class PointResult:
     gauges: Dict[str, float] = field(default_factory=dict)
     warmup_hit_rate: Optional[float] = None
     output_len: int = 0
+    request_rate: float = 0.0
 
     # ------------------------------------------------------------- SLA 判定
     def failing_keys(self, cfg) -> List[str]:
@@ -73,6 +74,7 @@ class PointResult:
             "reason": self.reason,
             "output_token_throughput": self.metrics.get("output_token_throughput", -1),
             "request_throughput_qps": self.metrics.get("request_throughput_qps", -1),
+            "request_rate": self.request_rate,
             "total_requests": self.metrics.get("total_requests", -1),
             "measured_concurrency": self.metrics.get("measured_concurrency", -1),
             "hbm_hit_rate": hit.get("hbm_hit_rate"),
@@ -162,6 +164,38 @@ class SlaSearch:
         return result
 
     def _collect_warnings(self, result: SearchResult) -> None:
+        """命中率可比性告警。"""
+        self._warn_hit_rate_saturation(result)
+        self._warn_rate_capped(result)
+
+    def _warn_rate_capped(self, result: SearchResult) -> None:
+        """请求频率成为瓶颈时告警：rate × 时延 < 目标并发 → 并发阶梯压不满。
+
+        例：--request-rate 3 配 500ms 时延，在途并发最多约 1.5，此时「最大并发」
+        测的是频率上限而不是服务能力，实测并发列会明显低于目标并发。
+        """
+        cfg = self.cfg
+        if cfg.request_rate <= 0:
+            return
+        capped = []
+        for point in result.points:
+            if point.kind != "probe":
+                continue
+            measured = point.metrics.get("measured_concurrency", -1)
+            if measured is None or measured < 0:
+                continue
+            if measured < 0.6 * point.concurrency:
+                capped.append((point.concurrency, measured))
+        if len(capped) < 2:
+            return
+        sample = "，".join(f"c={c} 实测 {m:.1f}" for c, m in capped[:3])
+        result.warnings.append(
+            f"实测并发明显低于目标并发（{sample} …）：请求频率 --request-rate "
+            f"{cfg.request_rate:g} 成了压力瓶颈（频率 × 时延 < 目标并发），并发阶梯压不满，"
+            "此时的结论反映的是该频率下的表现，而不是并发上限。要测并发上限请调大 "
+            "--request-rate，或设为 0（不限速）。")
+
+    def _warn_hit_rate_saturation(self, result: SearchResult) -> None:
         """识别「命中率逐点饱和」：各点缓存状态不同会让命中率失去可比性。
 
         典型成因：同一份数据集在探测点之间反复播放，缓存(即使被预热过)会逐步累积
@@ -309,7 +343,8 @@ class SlaSearch:
         point_prefix, point_dataset, point_seed = self._point_dataset(concurrency)
         self._probe_seq += 1
         point = PointResult(concurrency=concurrency, kind=kind, run_dir=run_dir,
-                            output_len=cfg.output_len, seed=point_seed)
+                            output_len=cfg.output_len, seed=point_seed,
+                            request_rate=cfg.request_rate)
 
         if cfg.reset_cache:
             ok, detail = metrics.reset_prefix_cache(cfg.base_url(), cfg.api_key)

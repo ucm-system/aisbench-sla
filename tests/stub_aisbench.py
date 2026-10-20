@@ -300,6 +300,8 @@ def resolve_params(args, cfg: dict, work_dir: str) -> dict:
         "data_num": max(1, int(round(float(data_num)))),
         "input_len": max(1, int(round(float(input_len)))),
         "repeat_rate": min(1.0, max(0.0, float(repeat_rate))),
+        "request_rate": max(0.0, float(pick(None, "STUB_REQUEST_RATE",
+                                           cfg.get("request_rate"), 0.0) or 0.0)),
         "dataset": str(dataset) if dataset else "",
         "_cfg": cfg,
     }
@@ -319,10 +321,34 @@ def traffic_base(cfg: dict, explicit: str) -> str:
 # --------------------------------------------------------------------------- #
 # the deterministic SLA model
 # --------------------------------------------------------------------------- #
+_TTFT_BASE_MS = 100.0
+_TTFT_PER_CONC_MS = 20.0
+
+
+def effective_concurrency(concurrency: float, request_rate: float = 0.0) -> float:
+    """模拟 ais_bench 的 ``request_rate``（RPS 到达上限）。
+
+    在途并发受「到达速率 × 服务时延」约束，即 ``min(并发, rate × 时延)``；
+    时延本身又与在途并发相关，故做定点迭代。``rate < 0.001`` 视为不限速。
+    """
+    c = max(1.0, float(concurrency))
+    rate = float(request_rate or 0.0)
+    if rate < 0.001:
+        return c
+    eff = c
+    for _ in range(16):
+        latency_s = (_TTFT_BASE_MS + _TTFT_PER_CONC_MS * eff) / 1000.0
+        new = min(c, max(1.0, rate * latency_s))
+        if abs(new - eff) < 1e-3:
+            return new
+        eff = new
+    return max(1.0, min(c, eff))
+
+
 def sla_metrics(concurrency: float) -> dict:
     """The contract the end-to-end test asserts against."""
     c = float(concurrency)
-    ttft_p90 = 100.0 + 20.0 * c
+    ttft_p90 = _TTFT_BASE_MS + _TTFT_PER_CONC_MS * c
     tpot_p90 = 10.0 + 0.5 * c
     ttft_avg = 60.0 + 14.0 * c
     tpot_avg = 8.0 + 0.4 * c
@@ -384,10 +410,11 @@ def table_lines(metrics: dict, data_num: int) -> list:
 
 def build_summary(c: float, params: dict, fmt: str, exp_folder: str) -> str:
     """The complete fake ais_bench stdout."""
-    metrics = sla_metrics(c)
+    eff = effective_concurrency(c, params.get("request_rate", 0.0))
+    metrics = sla_metrics(eff)
     data_num = params["data_num"]
     output_len = int(round(params["output_len"]))
-    duration_ms = benchmark_duration_ms(c, data_num, output_len, metrics)
+    duration_ms = benchmark_duration_ms(eff, data_num, output_len, metrics)
     duration_s = max(1e-6, duration_ms / 1000.0)
     total_in = data_num * params["input_len"]
     total_out = data_num * output_len
@@ -401,7 +428,7 @@ def build_summary(c: float, params: dict, fmt: str, exp_folder: str) -> str:
     lines.extend([
         f"Total Requests: {data_num}",
         f"Max Concurrency: {int(round(c))}",
-        f"Concurrency (measured): {c:.2f}",
+        f"Concurrency (measured): {eff:.2f}",
         f"Benchmark Duration (ms): {duration_ms:.2f}",
         f"Output Token Throughput: {total_out / duration_s:.2f} tok/s",
         f"Input Token Throughput: {total_in / duration_s:.2f} tok/s",

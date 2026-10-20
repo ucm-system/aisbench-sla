@@ -102,6 +102,7 @@ def build_command(args) -> list[str]:
         "--repeat-rate", "90%", "--seed", "1", "--dp", "1",
         "--ttft-" + args.ttft_stat, str(args.ttft_limit),
         "--tpot-" + args.tpot_stat, str(args.tpot_limit),
+        "--request-rate", str(args.request_rate),
         "--start", str(args.start), "--max", str(args.max),
         "--max-probes", str(args.max_probes), "--max-bisect", str(args.max_bisect),
         "--tolerance", str(args.tolerance),
@@ -250,6 +251,9 @@ def main() -> int:
     parser.add_argument("--tpot-stat", default="p90", help="TPOT 用哪个统计量做阈值")
     parser.add_argument("--ttft-limit", type=float, default=1200, help="TTFT 阈值（ms）")
     parser.add_argument("--tpot-limit", type=float, default=40, help="TPOT 阈值（ms）")
+    parser.add_argument("--request-rate", type=float, default=0.0,
+                        help="透传 --request-rate（默认 0=不限速：并发拐点场景需要，"
+                             "默认 3 会让压力瓶颈变成频率）")
     parser.add_argument("--start", type=int, default=1)
     parser.add_argument("--max", type=int, default=16)
     parser.add_argument("--max-probes", type=int, default=12)

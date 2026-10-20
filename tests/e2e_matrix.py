@@ -139,9 +139,11 @@ def _is_num(text: str) -> bool:
 
 
 def base_workload(extra: list) -> list:
+    """基础负载：显式 --request-rate 0，保持「并发拐点」语义确定
+    （默认 3 RPS 会让压力瓶颈变成频率，见 scenario_request_rate）。"""
     return ["--input-len", "512", "--output-len", "16", "--data-num", "8",
             "--dataset-type", "prefix_cache", "--prefix-num", "1",
-            "--repeat-rate", "90%", *extra]
+            "--repeat-rate", "90%", "--request-rate", "0", *extra]
 
 
 def scenario_point_stream(env: Env) -> None:
@@ -310,6 +312,55 @@ def scenario_stub_fail(env: Env) -> None:
           str(rows.get(16, {}).get("reason", ""))[:80])
 
 
+def scenario_request_rate(env: Env) -> None:
+    """请求频率：默认值 3 透传到 ais_bench 模型配置；0 = 不限速；低频时给出限速告警。"""
+    def generated_rate(work: Path) -> str:
+        path = (work / "ais_bench" / "benchmark" / "configs" / "models" / "vllm_api"
+                / "vllm_api_chat_temp.py")
+        if not path.is_file():
+            return "<缺少模型配置>"
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if "request_rate" in line:
+                return line.strip()
+        return "<无 request_rate>"
+
+    # ① 不传参 → 默认 3
+    out_default = env.out_dir("rate_default")
+    work_default = out_default / "work"
+    proc = env.run(["point", "--concurrency", "4",
+                    "--input-len", "512", "--output-len", "16", "--data-num", "8",
+                    "--dataset-type", "prefix_cache", "--prefix-num", "1",
+                    "--repeat-rate", "90%"], out_default, work_path=work_default)
+    rate_line = generated_rate(work_default)
+    check(proc.returncode == 0 and "request_rate=3.0" in rate_line,
+          "默认请求频率 3 写入 ais_bench 模型配置", rate_line)
+
+    # ② --request-rate 0 → 不限速
+    out_zero = env.out_dir("rate_zero")
+    work_zero = out_zero / "work"
+    env.run(["point", "--concurrency", "4", "--request-rate", "0",
+             "--input-len", "512", "--output-len", "16", "--data-num", "8",
+             "--dataset-type", "prefix_cache", "--prefix-num", "1",
+             "--repeat-rate", "90%"], out_zero, work_path=work_zero)
+    check("request_rate=0.0" in generated_rate(work_zero),
+          "--request-rate 0 表示不限速", generated_rate(work_zero))
+
+    # ③ 低频 + 高并发 → 告警并写进摘要；CSV 记录 request_rate
+    out_warn = env.out_dir("rate_warn")
+    proc3 = env.run(["search", "--input-len", "512", "--output-len", "16",
+                     "--data-num", "4", "--dataset-type", "prefix_cache",
+                     "--prefix-num", "1", "--repeat-rate", "90%",
+                     "--request-rate", "3", "--sla", "ttft.p90:999999999",
+                     "--start", "1", "--max", "8", "--max-probes", "4"], out_warn)
+    summary = json.loads((out_warn / "sla_summary.json").read_text(encoding="utf-8"))
+    check(any("请求频率" in w for w in summary.get("warnings", [])),
+          "低频瓶颈给出「请求频率」告警",
+          (summary.get("warnings") or ["<无告警>"])[0][:90])
+    rows = [r for r in env.rows(out_warn) if r["kind"] != "warmup"]
+    check(all(abs(r["request_rate"] - 3.0) < 1e-9 for r in rows),
+          "CSV 每行记录 request_rate", f"{len(rows)} 行")
+
+
 SCENARIOS = [
     ("point 模式 + 日志透传", scenario_point_stream),
     ("--no-stream", scenario_no_stream),
@@ -322,6 +373,7 @@ SCENARIOS = [
     ("--config JSON", scenario_config_json),
     ("探针预算", scenario_budget),
     ("桩失败点", scenario_stub_fail),
+    ("请求频率透传与限速告警", scenario_request_rate),
 ]
 
 

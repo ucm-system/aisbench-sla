@@ -68,7 +68,7 @@ class Config:
     input_len: int = 2048
     output_len: int = 32
     data_num: int = 64
-    request_rate: float = 0.0          # 0 = 不限制
+    request_rate: float = 3.0          # 请求频率（RPS，ais_bench 模型配置的 request_rate）；0 = 不限速
     test_type: str = "stream"          # stream | text
     dataset_type: str = "prefix_cache"  # prefix_cache | normal
     prefix_num: int = 1

@@ -48,6 +48,9 @@ python3 sla_search.py search \
 `--data-num` 取 `--max` 的 **2~4 倍**、下限 ≥ `--max`：请求数不足时最高几个并发点压不满（看 CSV 的
 `measured_concurrency`）、吞吐被低估。长上下文很贵，可收窄：`--max 16 --data-num 48`。
 
+请求频率默认 3 RPS（长上下文下 `3 × 30s ≫ 64`，并发仍是瓶颈，无需改动）；若服务很快、`measured_concurrency`
+明显低于目标并发，说明瓶颈是频率而非并发，用 `--request-rate 0` 不限速即可。
+
 实测输出（真实 ais_bench + 官方镜像，`--sla ttft.avg:900`；节选）：
 
 ```
@@ -112,6 +115,7 @@ ais_bench 的输出**实时打印到终端**（同时写入 `points/c<N>/*.log`�
 | `--model` / `--model-path` / `--api-key` | 服务端模型名 / tokenizer 路径（必填）/ 鉴权 |
 | `--pods` | 采集 `/metrics` 的端点，逗号分隔（PD 分离填各 P 节点，默认同 target） |
 | `--input-len` / `--output-len` / `--data-num` | 负载形态；`--data-num` 建议 `--max` 的 2~4 倍 |
+| `--request-rate` | 请求频率（RPS，默认 **3**，`0` = 不限速），写进 ais_bench 模型配置的 `request_rate`。**注意**：在途并发 ≈ `频率 × 时延`，所以频率太低会把瓶颈从并发变成频率（例如 3 RPS + 0.5s 时延 → 实测并发只有 ~1.5），此时工具会告警；要测并发上限就设 `0` |
 | `--dataset-type` | `prefix_cache`（默认）/ `normal` |
 | `--prefix-num` / `--repeat-rate` / `--seed` / `--dp` | 前缀数据集参数（`--repeat-rate` 支持 `90%` 或 `0.9`） |
 | `--length-mean/std/min/max` | 变长输入（高斯或均匀分布） |

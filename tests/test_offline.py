@@ -781,6 +781,9 @@ class EndToEndSearchTests(unittest.TestCase):
                "--prefix-num", "1", "--repeat-rate", "90%", "--seed", "1", "--dp", "1",
                "--ttft-p90", str(int(TTFT_P90_LIMIT)), "--tpot-p90", str(int(TPOT_P90_LIMIT)),
                "--start", "4", "--max", "128", "--output-dir", str(out),
+               # 本用例断言的是「并发拐点」，故显式不限速：工具默认 --request-rate 3
+               # 会让瓶颈变成到达频率（桩会如实模拟 rate × 时延 的在途并发上限）
+               "--request-rate", "0",
                "--aisbench-cmd", aisbench_cmd]
         extra = os.environ.get("SLA_E2E_EXTRA_ARGS", "").strip()
         if extra:

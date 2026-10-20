@@ -71,7 +71,10 @@ def add_workload_opts(parser: argparse.ArgumentParser) -> None:
     group.add_argument("--data-num", type=int,
                        help="数据集条数；建议取 --max 的 2~4 倍、下限 >= --max，"
                             "否则最高并发点压不满（measured_concurrency 低于目标、吞吐被低估）")
-    group.add_argument("--request-rate", type=float, help="请求频率，0=不限制")
+    group.add_argument("--request-rate", "--rate", dest="request_rate", type=float,
+                       help="请求频率（RPS），写进 ais_bench 模型配置的 request_rate；默认 3，"
+                            "0 = 不限速。注意：rate × 时延 < 目标并发时，压力瓶颈会变成频率，"
+                            "并发阶梯压不满（看实测并发列）")
     group.add_argument("--test-type", choices=["stream", "text"], help="流式/非流式")
     group.add_argument("--dataset-type", choices=["prefix_cache", "normal"],
                        help="前缀数据集或普通数据集")
@@ -246,7 +249,7 @@ def cmd_search(cfg: Config) -> int:
 
 
 def cmd_point(cfg: Config, args: argparse.Namespace) -> int:
-    cfg.request_rate = cfg.request_rate if cfg.request_rate is not None else 0.0
+    cfg.request_rate = cfg.request_rate if cfg.request_rate is not None else 3.0
     try:
         cfg.validate_for_run()
     except ValueError as exc:

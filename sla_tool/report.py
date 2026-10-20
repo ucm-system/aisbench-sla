@@ -162,6 +162,7 @@ def print_dry_run(cfg) -> None:
 # --------------------------------------------------------------------- 落盘
 CSV_FIELDS = [
     "kind", "concurrency", "seed", "output_len", "verdict", "reason",
+    "request_rate",
     *ALL_METRIC_KEYS,
     "hbm_hit_rate", "ext_hit_rate", "hit_rate_note",
     "warmup_hit_rate", "max_running", "elapsed_s", "log_path",
