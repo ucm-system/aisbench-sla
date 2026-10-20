@@ -1,0 +1,5 @@
+requests>=2.25        # 抓取 vLLM /metrics（必需）
+
+# 仅在需要「生成数据集」时才需要（ais_bench 容器内通常已自带）：
+#   transformers>=4.30
+# 若已有现成数据集，用 --dataset <jsonl> 可完全跳过该依赖。

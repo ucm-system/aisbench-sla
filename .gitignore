@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+sla_out/
+sla_datasets/
+points/
+*.log
+picked_ids.txt
+.dataset_cache/
+.rtest/
