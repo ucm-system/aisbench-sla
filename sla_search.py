@@ -58,7 +58,9 @@ def add_workload_opts(parser: argparse.ArgumentParser) -> None:
     group = parser.add_argument_group("负载形态")
     group.add_argument("--input-len", type=int, help="输入 token 长度")
     group.add_argument("--output-len", type=int, help="输出 token 长度")
-    group.add_argument("--data-num", type=int, help="数据集条数")
+    group.add_argument("--data-num", type=int,
+                       help="数据集条数；建议取 --max 的 2~4 倍、下限 >= --max，"
+                            "否则最高并发点压不满（measured_concurrency 低于目标、吞吐被低估）")
     group.add_argument("--request-rate", type=float, help="请求频率，0=不限制")
     group.add_argument("--test-type", choices=["stream", "text"], help="流式/非流式")
     group.add_argument("--dataset-type", choices=["prefix_cache", "normal"],

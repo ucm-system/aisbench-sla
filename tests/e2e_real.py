@@ -227,7 +227,9 @@ def main() -> int:
     parser.add_argument("--queue-ms", type=float, default=250.0, help="负载模型每超一档抬高的 TTFT")
     parser.add_argument("--input-len", type=int, default=2048)
     parser.add_argument("--output-len", type=int, default=64)
-    parser.add_argument("--data-num", type=int, default=16)
+    parser.add_argument("--data-num", type=int, default=16,
+                        help="数据集条数。测试默认只发一轮（= --max），够触发拐点且跑得快；"
+                             "真实测速请按 README 建议取 --max 的 2~4 倍")
     parser.add_argument("--ttft-p90", type=float, default=1200)
     parser.add_argument("--tpot-p90", type=float, default=40)
     parser.add_argument("--start", type=int, default=1)

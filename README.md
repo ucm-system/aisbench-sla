@@ -56,7 +56,7 @@ python3 sla_search.py search \
     --target 192.168.1.10:8000 \
     --model my-model --model-path /home/weights/my-model \
     --work-path /home/benchmark --dataset-path /home/dataset \
-    --input-len 65536 --output-len 1024 --data-num 24 \
+    --input-len 65536 --output-len 1024 --data-num 160 \
     --dataset-type prefix_cache --prefix-num 1 --repeat-rate 90% --seed 1 --dp 1 \
     --ttft-p90 30000 --tpot-p90 40 \
     --start 1 --max 64 --max-probes 12 --point-timeout 1800 \
@@ -65,8 +65,12 @@ python3 sla_search.py search \
 
 长上下文场景的四个注意点：
 
-1. **`--data-num` 要不小于计划探测的最大并发**（示例 24 条，配 `--max 64` 建议 2~4 倍于上限），
-   否则单点请求数不够、`measured_concurrency` 压不满，吞吐会被低估；
+1. **`--data-num` 取「计划探测的最大并发」的 2~4 倍**（示例 `--max 64` → `--data-num 160`），
+   **下限是 ≥ 最大并发**：请求数不够时最后几个并发点根本压不满——`measured_concurrency` 会
+   明显低于目标并发、吞吐被低估，TTFT/TPOT 的 P90 也失去统计意义（本工具会把
+   `measured_concurrency` 一并列在 CSV 里，便于自查）。
+   长上下文很贵：64K 输入 × 1K 输出 × 160 条 ≈ 每点千万级输入 token；若只想摸瓶颈量级，
+   可把 `--max` 收到 16~32 再按 2~4 倍取 `--data-num`（如 `--max 16 --data-num 48`）；
 2. **单点很慢**：每点 = 前缀预热 + 全量两阶段，64K×1K 的输出按秒计；用 `--point-timeout 1800`
    兜底、`--max-probes` 控预算，赶时间可加 `--prefix-warmup once`（只在首次预热前缀）；
 3. **`--max` 要给足**：上限内一直达标时结论会提示「可提高 --max 继续探测」（退出码 0），
@@ -194,7 +198,7 @@ stdout 会实时打印每个点的判定行，结束后打印明细表和结论�
 | `--host/--port/--url` | 兼容旧用法（`--url` 等价于 `--target` 传完整 URL） |
 | `--model/--model-path/--api-key` | 服务端模型名 / tokenizer 路径 / 鉴权 |
 | `--pods` | 采集 metrics 的端点，逗号分隔；PD 分离填各 P 节点（默认 `host:port`） |
-| `--input-len/--output-len/--data-num` | 工作负载形态 |
+| `--input-len/--output-len/--data-num` | 工作负载形态；`--data-num` 建议取 `--max` 的 2~4 倍、下限 ≥ `--max`（否则最高并发点压不满、吞吐被低估） |
 | `--prefix-num/--repeat-rate/--seed/--dp` | 前缀数据集参数（`--repeat-rate` 支持 `90%` 或 `0.9`） |
 | `--length-mean/std/min/max` | 变长输入（高斯或均匀分布），如 8k~128k 不定长 |
 | `--dataset-type` | `prefix_cache`（默认）或 `normal` |
@@ -294,8 +298,10 @@ CLI 为 `/usr/local/bin/ais_bench`），数据集最终落在 `/benchmark/ais_be
 - SLA 判定只看延迟阈值（按需求）；吞吐/成功率不作为门限，只在报告中展示。
 - 每次探测都是独立进程的真实压测，**总耗时 = 探测点数 × 单点时长**；用 `--prefix-warmup once`
   与合理的 `--max-probes` 控制时长。
-- 数据集按「工作负载形态 + seed」生成一次后被各探测点复用（保证命中率口径一致）；
-  若用 `--data-num` 随并发变化的需求，请按并发分别调用工具的 `point` 子命令。
+- 默认每个探测点用独立 seed 生成数据集（命中率各点可比）；用 `--no-seed-per-point` 可改为
+  各点复用同一份数据集（省时间，但命中率逐点饱和、各点不可比）。
+- 数据集条数 `--data-num` 在整轮搜索里固定；若想按参考工具那样让条数随并发变化
+  （如 `data_num = 并发 × 4`），请对每个并发分别调用 `point` 子命令。
 - 需要目标服务暴露 vLLM 风格 `/metrics` 的前缀缓存计数器才能给出命中率；
   缺失时命中率显示为「-」，不影响 SLA 判定。
 
