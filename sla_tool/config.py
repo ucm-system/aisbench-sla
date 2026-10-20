@@ -97,6 +97,7 @@ class Config:
     dry_run: bool = False
     verbose: bool = False
     stream_logs: bool = True           # ais_bench 输出实时透传到终端（同时落盘）
+    show_banner: bool = True           # 启动时打印大字横幅 + 运行配置框
 
     # ---- SLA 与搜索 ----
     # 规范键 → 阈值，如 {"ttft_p90": 2000, "tpot_avg": 30, "output_token_throughput_avg": 500}

@@ -234,6 +234,8 @@ class SlaSearch:
             # 尽早挂上文件日志，让 run.log / aisbench_all.log 覆盖从第一行起的全部消息
             paths = logs.setup_run_logging(cfg.output_dir, cfg.describe())
             logger.debug("运行日志：%s / %s", paths["run_log"], paths["all_log"])
+        if cfg.show_banner and not cfg.dry_run:
+            self._print_startup_banner()
         self._check_target_host()
         reachable, message = metrics.probe_service(cfg.base_url(), cfg.api_key)
         if reachable:
@@ -248,6 +250,32 @@ class SlaSearch:
         self.prefix_path, self.dataset_path = dataset.ensure_dataset(cfg)
         self._check_hit_rate_regime()
         metrics.wait_for_run_metrics(cfg.metrics_pods(), timeout=15.0)
+
+    def _print_startup_banner(self) -> None:
+        """启动横幅：大字 + 运行配置框（把这次要跑什么一次性摆在最前面）。"""
+        cfg = self.cfg
+        warmup = {"none": "不预热", "once": "仅首点预热", "per-point": "每点预热"}.get(
+            cfg.prefix_warmup, cfg.prefix_warmup)
+        rows = [
+            ("目标服务", f"{cfg.base_url()}     模型 {cfg.model or '(未指定)'}"),
+            ("负载形态", f"输入 {cfg.input_len} / 输出 {cfg.output_len} / {cfg.data_num} 条"
+                         f"    请求频率 {cfg.request_rate:g} RPS"
+                         + ("（不限速）" if cfg.request_rate <= 0 else "")),
+            ("SLA 口径", "；".join(rule.label() for rule in cfg.sla_rules()) or "（未设置）"),
+            ("搜索策略", f"并发 {cfg.start} → {cfg.max_concurrency}"
+                         f"（阶梯 ×2 + 二分，容差 {cfg.tolerance}）"
+                         f"    探测预算 {cfg.max_probes} 点"
+                         f"    二分上限 {cfg.max_bisect} 次"),
+            ("数据集", ("每点换 seed（命中率各点可比）" if cfg.seed_per_point
+                        else "各点复用同一份数据集（命中率会饱和）")
+                       + f"    {cfg.dataset or '按负载形态生成'}"),
+            ("缓存", f"预热：{warmup}    复位："
+                     + ("每点 POST /reset_prefix_cache" if cfg.reset_cache else "否")),
+            ("工作路径", cfg.work_path or "(未指定)"),
+            ("输出目录", f"{cfg.output_dir}    （sla_points.csv / sla_summary.json / "
+                         f"run.log / points/c<N>/）"),
+        ]
+        console.startup_banner(rows)
 
     def _check_hit_rate_regime(self) -> None:
         """开跑前提示命中率的可比性风险（默认每点换 seed，故仅在被显式关闭时提示）。"""

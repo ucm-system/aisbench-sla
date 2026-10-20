@@ -150,6 +150,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="终端颜色（默认 auto：仅在 TTY 上启用；日志文件始终纯文本）")
     parser.add_argument("--no-color", action="store_true", default=None,
                         help="等价 --color never")
+    parser.add_argument("--no-banner", action="store_true", default=None,
+                        help="不打印启动大字横幅与运行配置框")
     parser.add_argument("--version", action="version", version=f"aisbench-sla {__version__}")
     # 子命令也要能接收 --verbose / --config / --color（argparse 不继承父解析器选项）。
     # default=SUPPRESS：放在子命令之前的同名参数不会被这里的默认值覆盖。
@@ -165,6 +167,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="终端颜色（auto 仅在 TTY 上启用）")
     common.add_argument("--no-color", action="store_true", default=argparse.SUPPRESS,
                         help="等价 --color never")
+    common.add_argument("--no-banner", action="store_true", default=argparse.SUPPRESS,
+                        help="不打印启动大字横幅与运行配置框")
     sub = parser.add_subparsers(dest="command", required=True)
 
     search = sub.add_parser("search", help="自动搜索 SLA 内最大并发",
@@ -207,6 +211,8 @@ def namespace_to_config(args: argparse.Namespace) -> Config:
             target, value = "seed_per_point", False
         if key == "no_stream":
             target, value = "stream_logs", False
+        if key == "no_banner":
+            target, value = "show_banner", False
         if key == "pods":
             value = [item.strip() for item in str(value).split(",") if item.strip()]
         if key in sla_values or key in {dest for _flag, dest in SLA_FLAGS} \

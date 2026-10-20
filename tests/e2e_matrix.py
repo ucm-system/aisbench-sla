@@ -383,6 +383,20 @@ def scenario_output_framing(env: Env) -> None:
     check("\x1b[" not in plain.stdout, "--color never 时不带颜色")
     check("第 1/1 次探测" in plain.stdout, "--color never 仍保留框线层次")
 
+    # 启动大字横幅 + 运行配置框
+    check("运行配置" in plain.stdout and "╔" in plain.stdout,
+          "启动打印运行配置框")
+    art_lines = [ln for ln in plain.stdout.splitlines()
+                 if ln.strip().startswith("/_/") or "_" in ln and "|" in ln and "\\" in ln]
+    check(any("/_/   \\_\\" in ln for ln in plain.stdout.splitlines()),
+          "启动打印 figlet 大字横幅", f"匹配 {len(art_lines)} 行")
+    no_banner = env.run(["search", *base_workload([
+        "--sla", "ttft.p90:1200", "--start", "4", "--max", "4", "--max-probes", "1"]),
+        "--color", "never", "--no-banner"], env.out_dir("framing_nobanner"))
+    check("/_/   \\_\\" not in no_banner.stdout and "运行配置" not in no_banner.stdout,
+          "--no-banner 时不打印横幅与配置框")
+    check(no_banner.returncode == 0, "--no-banner 不影响执行", f"rc={no_banner.returncode}")
+
     # 日志文件一律纯文本（ais_bench 自身无条件上色，需要被剥掉）
     logs = [out / "run.log", out / "aisbench_all.log"]
     logs += list((out / "points").glob("c*/full.log"))
