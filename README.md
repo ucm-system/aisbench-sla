@@ -309,7 +309,8 @@ CLI 为 `/usr/local/bin/ais_bench`），数据集最终落在 `/benchmark/ais_be
 
 ```bash
 # 1) 纯离线（stdlib，不需要 NPU / Docker / 真实服务）：确定性桩 + 自建 mock
-py -3.11 tests/test_offline.py        # 17 个用例：指标契约、解析、SLA 边界搜索、失败分支
+py -3.11 tests/test_cli_surface.py     # CLI 表面：所有 --help 可用、关键开关与报错可读
+py -3.11 tests/test_offline.py         # 17 个用例：指标契约、解析、SLA 边界搜索、失败分支
 
 # 2) 完整链路（真 ais_bench + 本仓库自带的 mock）
 export SLA_E2E_TOKENIZER=/path/to/Qwen3-0.6B     # 或运行时传 --tokenizer

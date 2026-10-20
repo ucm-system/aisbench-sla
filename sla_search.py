@@ -100,7 +100,7 @@ def add_env_opts(parser: argparse.ArgumentParser) -> None:
                             "HBM 与外部缓存都从干净状态起测，命中率各点可比")
     group.add_argument("--no-seed-per-point", action="store_true", default=None,
                        help="关闭默认行为：各探测点复用同一份数据集（省去逐点重生成，"
-                            "适合长上下文；代价是后续点命中率会逐点饱和到 ~100%、各点不可比）")
+                            "适合长上下文；代价是后续点命中率会逐点饱和到接近 100%%、各点不可比）")
     group.add_argument("--dry-run", action="store_true", default=None,
                        help="只打印计划，不真正压测")
 
@@ -202,6 +202,10 @@ def cmd_search(cfg: Config) -> int:
     if result.points:
         report.print_table(result.points)
     report.print_summary(result, cfg)
+    if result.status == "error":
+        # 参数/环境类错误必须让 stderr 也能看到（脚本里只抓 stderr 时不能是空的）
+        print(f"错误：{result.error}", file=sys.stderr)
+        return result.exit_code
     csv_path = report.write_csv(cfg.output_dir, result.points)
     json_path = report.write_summary(cfg.output_dir, cfg, result)
     print(f"  明细 CSV：{csv_path}")

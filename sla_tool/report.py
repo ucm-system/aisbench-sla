@@ -105,6 +105,8 @@ def throughput_summary(points: Iterable[PointResult]) -> Dict[str, object]:
 def print_summary(result: SearchResult, cfg) -> None:
     print()
     print("=" * 118)
+    if result.error:
+        print(f"错误：{result.error}")
     print(f"结论：{result.note}")
     if result.max_ok is not None:
         print(f"  SLA 内最大并发：{result.max_ok}")
