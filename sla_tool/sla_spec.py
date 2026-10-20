@@ -169,6 +169,15 @@ def describe_values(rules: List[SlaRule], metrics: Dict[str, float]) -> str:
     return "，".join(parts)
 
 
+def canonical_key(text: str) -> str:
+    """`ttft.p90` / `ttft-p90` / `ttft_p90` / `e2e.max` → 规范键（不含阈值）。"""
+    body = str(text).strip().lower().replace("-", "_").replace(".", "_")
+    metric, _, agg = body.rpartition("_")
+    if not metric or not agg:
+        raise ValueError(f"非法 SLA 键：{text!r}（示例：ttft.p90 / tpot_avg / e2e.max）")
+    return make_key(normalize_metric(metric), normalize_agg(agg))
+
+
 def discrete_flag_names() -> List[str]:
     """CLI 离散开关名：--ttft-avg …（延迟三指标 × 全部统计量）。"""
     names = []

@@ -20,7 +20,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional
 
-from . import aisbench, dataset, metrics
+from . import aisbench, dataset, logs, metrics
 from .parse import METRIC_DEFAULTS, parse_aisbench_log, looks_like_bad_num_warmups
 
 logger = logging.getLogger(__name__)
@@ -194,6 +194,10 @@ class SlaSearch:
     def _prepare(self) -> None:
         cfg = self.cfg
         os.makedirs(cfg.output_dir, exist_ok=True)
+        if not cfg.dry_run:
+            # 尽早挂上文件日志，让 run.log / aisbench_all.log 覆盖从第一行起的全部消息
+            paths = logs.setup_run_logging(cfg.output_dir, cfg.describe())
+            logger.debug("运行日志：%s / %s", paths["run_log"], paths["all_log"])
         self._check_target_host()
         reachable, message = metrics.probe_service(cfg.base_url(), cfg.api_key)
         if reachable:
@@ -254,13 +258,14 @@ class SlaSearch:
         aisbench.mount_dataset(cfg.work_path, dataset_file)
         command = aisbench.build_command(cfg, run_dir, with_num_warmups=True)
         log_path = os.path.join(run_dir, f"{tag}.log")
+        all_log = os.path.join(cfg.output_dir, "aisbench_all.log")
         before = metrics.snapshot_pods(cfg.metrics_pods())
         sampler = metrics.GaugeSampler(cfg.metrics_pods())
         sampler.start()
         try:
-            command_result = aisbench.run_command(command, log_path, cwd=run_dir,
-                                                  timeout=cfg.point_timeout,
-                                                  verbose=cfg.verbose)
+            command_result = aisbench.run_command(
+                command, log_path, cwd=run_dir, timeout=cfg.point_timeout,
+                verbose=cfg.verbose, stream=cfg.stream_logs, all_log=all_log)
             if (not command_result.ok and cfg.num_warmups
                     and looks_like_bad_num_warmups(log_path)):
                 self.on_event("检测到 ais_bench 不识别 --num-warmups，去掉该参数重试"
@@ -268,14 +273,15 @@ class SlaSearch:
                 retry_log = os.path.join(run_dir, f"{tag}.retry0.log")
                 os.replace(log_path, retry_log)
                 command = aisbench.build_command(cfg, run_dir, with_num_warmups=False)
-                command_result = aisbench.run_command(command, log_path, cwd=run_dir,
-                                                      timeout=cfg.point_timeout,
-                                                      verbose=cfg.verbose)
+                command_result = aisbench.run_command(
+                    command, log_path, cwd=run_dir, timeout=cfg.point_timeout,
+                    verbose=cfg.verbose, stream=cfg.stream_logs, all_log=all_log)
         finally:
             gauges = sampler.stop()
         after = metrics.snapshot_pods(cfg.metrics_pods())
         hit = metrics.diff_snapshots(before, after)
-        parsed, _ = parse_aisbench_log(log_path, npu_num=cfg.npu_num)
+        parsed, log_dir = parse_aisbench_log(log_path, npu_num=cfg.npu_num)
+        aisbench.copy_log_to_exp_folder(log_path, log_dir, tag)
         return command_result, parsed, hit, gauges
 
     def _point_dataset(self, concurrency: int) -> tuple:

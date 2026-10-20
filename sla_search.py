@@ -147,6 +147,8 @@ def build_parser() -> argparse.ArgumentParser:
     # 子命令也要能接收 --verbose / --config（argparse 不继承父解析器选项）
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--verbose", action="store_true", help="输出调试日志")
+    common.add_argument("--no-stream", action="store_true", default=None,
+                        help="不把 ais_bench 输出实时打到终端（仍写入 points/c<N>/*.log）")
     common.add_argument("--config", help="JSON 配置文件（CLI 参数优先级更高）")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -188,6 +190,8 @@ def namespace_to_config(args: argparse.Namespace) -> Config:
             target, value = "num_warmups", False
         if key == "no_seed_per_point":
             target, value = "seed_per_point", False
+        if key == "no_stream":
+            target, value = "stream_logs", False
         if key == "pods":
             value = [item.strip() for item in str(value).split(",") if item.strip()]
         if key in sla_values or key in {dest for _flag, dest in SLA_FLAGS} \

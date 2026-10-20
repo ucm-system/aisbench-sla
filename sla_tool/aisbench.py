@@ -17,6 +17,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Dict, Optional
@@ -179,33 +180,74 @@ class CommandResult:
 
 
 def run_command(command: str, log_path: str, cwd: str, timeout: float = 0.0,
-                verbose: bool = False) -> CommandResult:
-    """执行命令，输出写入 log_path；超时则终止整个进程树。"""
+                verbose: bool = False, stream: bool = True,
+                all_log: str = "") -> CommandResult:
+    """执行命令：输出**实时透传**到终端，同时写入 log_path（并追加到 all_log）。
+
+    参考工具是把 ais_bench 的输出直接打到终端（不重定向），这里保留同样的可见性，
+    但额外 tee 一份到该探测点的日志文件，便于事后排查。
+    """
     os.makedirs(os.path.dirname(os.path.abspath(log_path)) or ".", exist_ok=True)
     logger.info("执行：%s", command)
-    logger.info("日志：%s", log_path)
+    if not stream:
+        logger.info("日志：%s（--no-stream，不实时打印）", log_path)
     started = time.time()
     popen_kwargs: Dict[str, object] = {}
     if sys.platform != "win32":
         popen_kwargs["start_new_session"] = True
-    with open(log_path, "w", encoding="utf-8", errors="replace") as log_file:
-        proc = subprocess.Popen(  # noqa: S602 - 用户可自定义 aisbench 命令
-            command, shell=True, cwd=cwd, stdout=log_file,
-            stderr=subprocess.STDOUT, text=True, **popen_kwargs)
-        timed_out = False
-        try:
-            proc.wait(timeout=timeout if timeout and timeout > 0 else None)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            logger.warning("单点超时（%.0fs），终止进程树", timeout)
-            _terminate_tree(proc)
+    all_handle = open(all_log, "a", encoding="utf-8", errors="replace") if all_log else None
+    try:
+        with open(log_path, "w", encoding="utf-8", errors="replace") as log_file:
+            proc = subprocess.Popen(  # noqa: S602 - 用户可自定义 aisbench 命令
+                command, shell=True, cwd=cwd, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, text=True, encoding="utf-8",
+                errors="replace", bufsize=1, **popen_kwargs)
+
+            def _tee() -> None:
+                # 必须持续读管道：既是为了实时打印，也避免写满管道把子进程卡死
+                for line in proc.stdout:  # type: ignore[union-attr]
+                    log_file.write(line)
+                    log_file.flush()
+                    if all_handle is not None:
+                        all_handle.write(line)
+                        all_handle.flush()
+                    if stream:
+                        sys.stdout.write(line)
+                        sys.stdout.flush()
+
+            reader = threading.Thread(target=_tee, daemon=True, name="aisbench-tee")
+            reader.start()
+            timed_out = False
             try:
-                proc.wait(timeout=30)
+                proc.wait(timeout=timeout if timeout and timeout > 0 else None)
             except subprocess.TimeoutExpired:
-                pass
+                timed_out = True
+                logger.warning("单点超时（%.0fs），终止进程树", timeout)
+                _terminate_tree(proc)
+                try:
+                    proc.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    pass
+            reader.join(timeout=10)
+    finally:
+        if all_handle is not None:
+            all_handle.close()
     duration = time.time() - started
     return CommandResult(command=command, returncode=proc.returncode or 0,
                          duration_s=duration, log_path=log_path, timed_out=timed_out)
+
+
+def copy_log_to_exp_folder(log_path: str, log_dir: str, tag: str) -> str:
+    """把本次运行的日志回拷到 ais_bench 的 exp 目录（对齐参考工具的 save_log）。"""
+    if not log_dir or not os.path.isdir(log_dir) or not os.path.isfile(log_path):
+        return ""
+    try:
+        target = os.path.join(log_dir, f"aisbench_{tag}.log")
+        shutil.copy2(log_path, target)
+        return target
+    except OSError as exc:
+        logger.warning("回拷日志到 exp 目录失败（忽略）：%s", exc)
+        return ""
 
 
 def tail(path: str, lines: int = 20) -> str:

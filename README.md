@@ -96,9 +96,13 @@ python3 sla_search.py search \
 sla_out/
 ├── sla_points.csv      每点一行：并发/判定/各项统计量/吞吐/命中率/实测并发/峰值在途/日志路径
 ├── sla_summary.json    结论、SLA 口径、全部探测点
+├── aisbench_all.log    本轮所有相位拼接的 ais_bench 原始输出
 ├── datasets/           数据集（默认 seed<N>/ 每点一份，可复用）
 └── points/c<N>/        warmup.log、full.log（原始 ais_bench 日志）
 ```
+
+ais_bench 的输出**实时打印到终端**（同时写入 `points/c<N>/*.log`，并回拷一份到它的 exp 目录）；
+不想刷屏用 `--no-stream`。
 
 ## 参数速查
 
@@ -121,6 +125,7 @@ sla_out/
 | `--dataset-path` / `--output-dir` | 数据集目录 / 结果目录 |
 | `--aisbench-cmd` / `--aisbench-extra-args` | 替换 / 追加 ais_bench 命令 |
 | `--point-timeout` | 单点超时秒数（超时终止进程树） |
+| `--no-stream` | 不把 ais_bench 输出实时打到终端（仍写入日志文件） |
 | `--no-num-warmups` | 不附加 `--num-warmups 0`（老版本 ais_bench） |
 | `--dry-run` | 只打印探测计划 |
 | `--config` | JSON 配置文件（CLI 参数优先） |
@@ -130,6 +135,7 @@ sla_out/
 ```bash
 py -3.11 tests/test_cli_surface.py      # CLI 表面（--help、报错可读）
 py -3.11 tests/test_offline.py          # 离线：确定性桩 + 自建 mock
+py -3.11 tests/e2e_matrix.py            # 端到端矩阵（11 个场景：超时/退出码/多约束/配置…）
 py -3.11 tests/e2e_real.py --no-docker  # 离线全链路
 py -3.11 tests/e2e_real.py              # 真实 ais_bench 镜像 + 自带 mock
 ```

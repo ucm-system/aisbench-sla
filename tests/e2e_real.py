@@ -232,7 +232,9 @@ def main() -> int:
     parser.add_argument("--tokenizer", default=os.environ.get("SLA_E2E_TOKENIZER", ""),
                         help="tokenizer 目录（生成数据集用）；也可用环境变量 "
                              "SLA_E2E_TOKENIZER 指定")
-    parser.add_argument("--out", default=str(ROOT / ".rtest" / "e2e_real"))
+    parser.add_argument("--out", default="",
+                        help="产物目录（默认按模式区分：真实 .rtest/e2e_real，"
+                             "--no-docker .rtest/e2e_real_offline，避免两者并发时互相覆盖）")
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--ttft", type=float, default=500)
     parser.add_argument("--tpot", type=float, default=10)
@@ -268,6 +270,9 @@ def main() -> int:
                              "默认在未用 --reuse-dataset 时开启")
     parser.add_argument("--keep", action="store_true", help="保留 mock 进程与输出目录")
     args = parser.parse_args()
+    if not args.out:
+        args.out = str(ROOT / ".rtest" /
+                       ("e2e_real_offline" if args.no_docker else "e2e_real"))
     if args.assert_no_saturation is None:
         # 默认（每点换 seed）本就应当不饱和；显式复用数据集时才需要另开断言
         args.assert_no_saturation = not args.reuse_dataset

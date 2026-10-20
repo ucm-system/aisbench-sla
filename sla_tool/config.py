@@ -96,11 +96,13 @@ class Config:
     seed_per_point: bool = True        # 默认：每点用 seed+i 生成独立数据集（保证命中率各点可比）
     dry_run: bool = False
     verbose: bool = False
+    stream_logs: bool = True           # ais_bench 输出实时透传到终端（同时落盘）
 
     # ---- SLA 与搜索 ----
     # 规范键 → 阈值，如 {"ttft_p90": 2000, "tpot_avg": 30, "output_token_throughput_avg": 500}
     # 键由 sla_spec 解析（metric_agg），延迟为上限、吞吐为下限，多条 AND。
-    sla: Dict[str, float] = field(default_factory=dict)
+    # JSON 里也接受 {"ttft.p90": 2000} 或 ["ttft.p90:2000", ...] 两种写法。
+    sla: Any = field(default_factory=dict)
     sla_direction: Dict[str, bool] = field(default_factory=dict)  # 显式方向覆盖（可选）
     ttft_p90: Optional[float] = None   # 兼容旧参数：等价 sla.ttft_p90（ms）
     tpot_p90: Optional[float] = None   # 兼容旧参数：等价 sla.tpot_p90（ms）
@@ -133,14 +135,32 @@ class Config:
 
     def normalize(self) -> None:
         self.repeat_rate = parse_prefix_ratio(self.repeat_rate)
-        # SLA：统一收敛到 sla 字典（旧字段并入，保持向后兼容）
+        # SLA：统一收敛到 sla 字典（旧字段并入，保持向后兼容）。
+        # 支持三种输入：
+        #   {"ttft_p90": 2000, "tpot_avg": 30}          # 键 = metric.agg / metric_agg
+        #   {"ttft.p90:2000": null}                     # 键 = 完整约束串（值忽略）
+        #   ["ttft.p90:2000", "tpot.avg:30"]            # 列表形式
         from . import sla_spec  # 局部导入避免循环
+        raw = self.sla
+        items = []
+        if isinstance(raw, dict):
+            items = list(raw.items())
+        elif isinstance(raw, (list, tuple)):
+            items = [(str(item), None) for item in raw]
         merged: Dict[str, float] = {}
-        for key, limit in dict(self.sla or {}).items():
-            if limit is None:
+        for key, limit in items:
+            text = str(key).strip()
+            if not text:
                 continue
-            norm_key, value = sla_spec.parse_spec(key) if ("." in key or ":" in key
-                                                           or "=" in key) else (key, float(limit))
+            if ":" in text or "=" in text:
+                norm_key, value = sla_spec.parse_spec(text)
+            else:
+                norm_key = sla_spec.canonical_key(text)
+                if limit is None:
+                    raise ValueError(
+                        f"SLA 配置缺少阈值：{key!r}（字典形式的值需给阈值，"
+                        "或改用 'ttft.p90:2000' 这种完整串）")
+                value = float(limit)
             merged[norm_key] = value
         for legacy in ("ttft_p90", "tpot_p90"):
             value = getattr(self, legacy)

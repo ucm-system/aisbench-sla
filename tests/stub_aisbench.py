@@ -532,6 +532,16 @@ def main(argv=None) -> int:
     fail_at = _fail_at_set()
     base = traffic_base(cfg, args.traffic_url)
 
+    # STUB_SLEEP_S：模拟「单点很慢」，用于测试工具的 --point-timeout 终止路径
+    sleep_s = 0.0
+    try:
+        sleep_s = float(os.environ.get("STUB_SLEEP_S", "0") or 0)
+    except ValueError:
+        _warn("STUB_SLEEP_S 不是数字，忽略")
+    if sleep_s > 0:
+        _warn(f"sleeping {sleep_s:g}s (STUB_SLEEP_S) to simulate a slow point")
+        time.sleep(sleep_s)
+
     if args.self_check:
         points = cli_points or _parse_conc_list(args.self_check_conc)
         out = []
