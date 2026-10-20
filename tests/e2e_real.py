@@ -216,7 +216,9 @@ def stop_mock(proc: subprocess.Popen) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="aisbench-sla 完整真实链路测试")
     parser.add_argument("--image", default=DEFAULT_IMAGE)
-    parser.add_argument("--tokenizer", default=r"D:\Models\Qwen3-0.6B")
+    parser.add_argument("--tokenizer", default=os.environ.get("SLA_E2E_TOKENIZER", ""),
+                        help="tokenizer 目录（生成数据集用）；也可用环境变量 "
+                             "SLA_E2E_TOKENIZER 指定")
     parser.add_argument("--out", default=str(ROOT / ".rtest" / "e2e_real"))
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--ttft", type=float, default=500)
@@ -262,6 +264,13 @@ def main() -> int:
 
     print(f"模式：{'离线桩（无 Docker）' if args.no_docker else '真实 ais_bench（Docker）'}")
     print(f"输出目录：{args.out}")
+    if not args.tokenizer:
+        print("错误：必须提供 --tokenizer（或环境变量 SLA_E2E_TOKENIZER），"
+              "例如 --tokenizer /path/to/Qwen3-0.6B")
+        return 1
+    if not Path(args.tokenizer).is_dir():
+        print(f"错误：tokenizer 目录不存在：{args.tokenizer}")
+        return 1
     if not args.keep and Path(args.out).exists():
         shutil.rmtree(args.out, ignore_errors=True)
     Path(args.out).mkdir(parents=True, exist_ok=True)
