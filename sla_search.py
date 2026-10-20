@@ -40,9 +40,13 @@ LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
 # --------------------------------------------------------------------- 参数
 def add_target_opts(parser: argparse.ArgumentParser) -> None:
     group = parser.add_argument_group("目标服务")
-    group.add_argument("--host", help="服务 IP")
+    group.add_argument("--target",
+                       help="统一目标地址：IP:PORT / host:port / http(s)://host[:port][/path]"
+                            "（自动转成 ais_bench 需要的 host_ip/host_port 或 url；"
+                            "优先级高于 --host/--port/--url）")
+    group.add_argument("--host", help="服务 IP 或主机名（也可直接写 IP:PORT / http://...）")
     group.add_argument("--port", type=int, help="服务端口")
-    group.add_argument("--url", help="完整 baseUrl（设置后忽略 host/port）")
+    group.add_argument("--url", help="完整 baseUrl（等价 --target）")
     group.add_argument("--model", help="服务端模型名")
     group.add_argument("--model-path", help="tokenizer 路径（生成数据集用）")
     group.add_argument("--api-key", help="鉴权 key")

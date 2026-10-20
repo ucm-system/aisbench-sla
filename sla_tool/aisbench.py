@@ -65,6 +65,9 @@ def render_model_config(cfg, concurrency: int, output_len: int,
     extra = ""
     if cfg.enable_think:
         extra = ',\n            chat_template_kwargs={"enable_thinking": True}'
+    # 目标寻址由 cfg.model_fields() 决定写 host_ip/host_port 还是 url，
+    # 规避 ais_bench「host_ip 必须是 IP」的校验雷区（详见 sla_tool/target.py）
+    target_fields = cfg.model_fields()
     text = API_TEMPLATE
     for placeholder, value in (
         ("__API_TYPE__", api_type),
@@ -73,9 +76,9 @@ def render_model_config(cfg, concurrency: int, output_len: int,
         ("__MODEL_NAME__", cfg.model),
         ("__API_KEY__", cfg.api_key or ""),
         ("__REQUEST_RATE__", repr(float(request_rate))),
-        ("__HOST_IP__", cfg.host),
-        ("__HOST_PORT__", str(cfg.port)),
-        ("__URL__", cfg.url or ""),
+        ("__HOST_IP__", str(target_fields["host_ip"])),
+        ("__HOST_PORT__", str(target_fields["host_port"])),
+        ("__URL__", str(target_fields["url"])),
         ("__OUTPUT_LEN__", str(int(output_len))),
         ("__CONCURRENCY__", str(int(concurrency))),
         ("__EXTRA_KWARGS__", extra),

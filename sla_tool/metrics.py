@@ -188,11 +188,16 @@ def diff_snapshots(before: Dict[str, Dict[str, Dict[str, float]]],
 
 
 class GaugeSampler:
-    """压测期间后台采样在途请求数，用于确认并发确实压上去了。"""
+    """压测期间后台采样在途请求数。
 
-    def __init__(self, pods: List[str], interval: float = 2.0) -> None:
+    注意：这是**采样值**，请求窗口很短时（小模型/短输出）可能整个窗口都落在
+    两次采样之间而采到 0 —— 「并发是否真压上去」的权威依据是 ais_bench 汇总里的
+    实测并发（measured_concurrency），本采样只作辅助证据，默认 0.5s 一次。
+    """
+
+    def __init__(self, pods: List[str], interval: float = 0.5) -> None:
         self.pods = pods
-        self.interval = max(0.5, interval)
+        self.interval = max(0.2, interval)
         self.max_running = 0.0
         self.max_waiting = 0.0
         self.samples = 0

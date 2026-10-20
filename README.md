@@ -19,7 +19,7 @@ export PYTHONPATH=...   # 能 import ais_bench 即可
 
 # 1) 自动搜索：前缀缓存场景下满足 SLA 的最大并发
 python3 sla_search.py search \
-    --host 192.168.1.10 --port 8000 \
+    --target 192.168.1.10:8000 \
     --model my-model --model-path /home/weights/my-model \
     --work-path /home/benchmark \
     --dataset-path /home/dataset \
@@ -30,7 +30,8 @@ python3 sla_search.py search \
 
 # 2) 单并发点压测（等价于参考工具的 aisbench_test.py）
 python3 sla_search.py point \
-    --host 192.168.1.10 --port 8000 --model my-model --model-path /home/weights/my-model \
+    --target host.docker.internal:8000 \
+    --model my-model --model-path /home/weights/my-model \
     --work-path /home/benchmark --dataset-path /home/dataset \
     --input-len 2048 --output-len 32 --data-num 160 --concurrency 64 \
     --dataset-type prefix_cache --repeat-rate 90% --prefix-num 1
@@ -100,7 +101,8 @@ stdout 会实时打印每个点的判定行，结束后打印明细表和结论�
 
 | 参数 | 说明 |
 | --- | --- |
-| `--host/--port/--url` | 目标服务地址（`--url` 优先） |
+| `--target` | **推荐**：`IP:PORT` / `host:port` / `http(s)://host[:port][/path]`，自动转成 ais_bench 的 `host_ip/host_port` 或 `url`（见上一节） |
+| `--host/--port/--url` | 兼容旧用法（`--url` 等价于 `--target` 传完整 URL） |
 | `--model/--model-path/--api-key` | 服务端模型名 / tokenizer 路径 / 鉴权 |
 | `--pods` | 采集 metrics 的端点，逗号分隔；PD 分离填各 P 节点（默认 `host:port`） |
 | `--input-len/--output-len/--data-num` | 工作负载形态 |
@@ -130,6 +132,34 @@ stdout 会实时打印每个点的判定行，结束后打印明细表和结论�
 | 结构化输出 | CSV + 日志 | ✅ CSV + JSON 摘要 + 每点日志 |
 | 无人值守 | 需自行拼脚本 | ✅ 探针预算 + 单点超时 + 语义化退出码 |
 
+## 目标地址：统一塞一个 `--target`（推荐）
+
+ais_bench 的 API 模型有**两套寻址字段**，而且不是干净的二选一（源码实读 + 实测）：
+
+| | `host_ip` + `host_port` | `url` |
+| --- | --- | --- |
+| 运行时 | 拼 `{http\|https}://{host_ip}:{host_port}/`（IPv6 自动加方括号） | 直接用 `url`（无 scheme 补 `http://`），**host_ip/host_port 被忽略** |
+| 配置校验 | `host_ip` 必须是合法 IPv4/IPv6，唯一放行的非 IP 值是 `"localhost"` | 校验表里**没有 url** |
+| 主机名 | 运行时代码其实支持（注释写着 "it's a hostname, use it as is"），却**被前置校验拦死** | 天然支持 |
+| `host_port` | 必须 int ∈ (0,65536)，**与 url 无关地强制校验** | 同左 |
+| 请求 URL | `urljoin(base_url, "v1/chat/completions")` | 同左 → **url 带路径必须以 `/` 结尾**，否则路径被替换 |
+
+后果就是：给域名/容器别名（如 `host.docker.internal`）时，必须知道"要改用 `url` 字段、
+还得把 `host_ip` 写成 `localhost`"才能过校验——这不该让使用者背。
+
+本工具用**一个 `--target`** 抹平（`--host/--port/--url` 仍兼容）：
+
+```bash
+--target 192.168.65.254:8000          # 裸 IP:PORT      -> host_ip/host_port
+--target host.docker.internal:8099    # 主机名          -> url=http://host.docker.internal:8099
+--target https://gw.example.com/v1/   # https/带路径     -> url=.../v1/（自动补末尾 /）
+--target [::1]:8000                   # IPv6            -> host_ip=::1
+```
+
+规则：**裸 IP[:端口] 走 `host_ip`/`host_port`；主机名、带 scheme、带路径一律走 `url`，
+并同时写 `host_ip="localhost"` 规避校验雷区**；`--pods` 也从同一 target 推导。
+实测：`--target host.docker.internal:8099` 直连成功（此前同一输入必报 `[UTILS-CFG-002]`）。
+
 ## 在官方 ais_bench 镜像里运行（已实测）
 
 推荐直接在 AISBench 官方镜像里跑本工具（`ais_bench` 与依赖都在镜像内），mock/真实服务留在宿主机：
@@ -150,14 +180,12 @@ docker run --rm \
 transformers 4.57.6 / requests 2.33.1），`--work-path` 取 **`/benchmark`**（镜像内 ais_bench 源码根，
 CLI 为 `/usr/local/bin/ais_bench`），数据集最终落在 `/benchmark/ais_bench/datasets/gsm8k/test.jsonl`。
 
-踩过的两个坑（工具已内置提示/校验）：
+容器里访问宿主机服务时，**直接用 `--target host.docker.internal:<端口>` 即可**
+（工具会自动走 url 字段，无需手工解析 IP）。
 
-1. **`host_ip` 必须是 IP**：ais_bench 会校验 `host_ip` 为 IPv4/IPv6，写 `host.docker.internal`
-   会直接报 `[UTILS-CFG-002] model config validate failed`。容器内先取宿主 IP
-   （`getent hosts host.docker.internal`，Docker Desktop 上通常是 `192.168.65.254`）再传 `--host`；
-   工具会在检测到主机名时打印提醒。
-2. **`--model-path` 必填**：即使已用 `--dataset` 指定现成数据集，ais_bench 的模型配置仍需 tokenizer 路径，
-   否则报 `[UTILS-FILE-002] tokenizer path not found`。工具已把该参数设为必填并给出明确报错。
+另一个必知项：**`--model-path` 必填**——即使已用 `--dataset` 指定现成数据集，ais_bench 的模型配置
+仍需要 tokenizer 路径，否则报 `[UTILS-FILE-002] tokenizer path not found`。工具已把该参数设为必填
+并给出明确报错。
 
 ## 常见问题
 

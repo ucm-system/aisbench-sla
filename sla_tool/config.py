@@ -54,9 +54,10 @@ class Config:
     """一次压测/SLA 搜索的完整配置。"""
 
     # ---- 目标服务 ----
+    target: str = ""                   # 统一入口：IP:PORT / host:port / http(s)://host[:port][/path]
     host: str = "127.0.0.1"
     port: int = 8000
-    url: str = ""                      # 设置后忽略 host/port
+    url: str = ""                      # 兼容旧用法（等价于 --target 传完整 URL）
     model: str = "model"               # 服务端模型名
     model_path: str = ""               # tokenizer 路径（生成数据集用）
     api_key: str = ""
@@ -154,6 +155,15 @@ class Config:
             self.model_path = os.path.abspath(self.model_path)
         if self.dataset:
             self.dataset = os.path.abspath(self.dataset)
+        # 目标地址归一化：统一 --target / --url / --host:--port，自动决定写
+        # ais_bench 的 host_ip/host_port 还是 url（见 sla_tool/target.py 说明）
+        from .target import resolve  # 局部导入避免循环
+        parsed, fields = resolve(self.target, host=self.host, port=self.port,
+                                 url=self.url)
+        self._target_obj = parsed
+        self.host = parsed.host
+        self.port = int(parsed.port or (443 if parsed.effective_scheme == "https" else 80))
+        self.url = str(fields["url"]) if parsed.use_url_field else ""
         if not self.dataset_path:
             self.dataset_path = os.path.join(self.output_dir, "datasets")
         self.dataset_path = os.path.abspath(self.dataset_path)
@@ -186,12 +196,32 @@ class Config:
             raise ValueError(f"--model-path 目录不存在：{self.model_path}")
 
     # ------------------------------------------------------------------ 便捷
+    def model_fields(self) -> Dict[str, object]:
+        """写入 ais_bench 模型配置的 host_ip / host_port / url 三件套。"""
+        parsed = getattr(self, "_target_obj", None)
+        if parsed is not None:
+            return parsed.model_fields()
+        if self.url:
+            url = self.url if self.url.startswith(("http://", "https://")) else f"http://{self.url}"
+            return {"host_ip": "localhost", "host_port": self.port or 80, "url": url}
+        return {"host_ip": self.host, "host_port": self.port or 8000, "url": ""}
+
+    def target_mode(self) -> str:
+        parsed = getattr(self, "_target_obj", None)
+        return "url" if parsed is not None and parsed.use_url_field else "host_ip"
+
     def metrics_pods(self) -> List[str]:
         if self.pods:
             return list(self.pods)
+        parsed = getattr(self, "_target_obj", None)
+        if parsed is not None:
+            return [parsed.metrics_endpoint()]
         return [f"{self.host}:{self.port}"]
 
     def base_url(self) -> str:
+        parsed = getattr(self, "_target_obj", None)
+        if parsed is not None:
+            return parsed.base_url().rstrip("/")
         if self.url:
             return self.url.rstrip("/")
         return f"http://{self.host}:{self.port}"

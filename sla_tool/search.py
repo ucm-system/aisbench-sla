@@ -175,20 +175,21 @@ class SlaSearch:
         metrics.wait_for_run_metrics(cfg.metrics_pods(), timeout=15.0)
 
     def _check_target_host(self) -> None:
-        """ais_bench 会校验 host_ip 必须是 IPv4/IPv6，主机名会被直接拒绝（真实踩坑）。
+        """报告最终寻址方式，并提醒 ais_bench 的 host_ip 校验限制。
 
-        目标用域名/容器别名时，正确做法是给 IP（容器内可先解析）或用 --url 传完整 baseUrl。
+        归一化后主机名一律走 url 字段（host_ip 只写 "localhost"），因此不会
+        再触发 [UTILS-CFG-002]；这里仅把结果说清楚，便于对照日志排查。
         """
         cfg = self.cfg
-        if cfg.url:
+        parsed = getattr(cfg, "_target_obj", None)
+        if parsed is None:
             return
-        try:
-            ipaddress.ip_address(cfg.host)
-        except ValueError:
-            self.on_event(
-                f"注意：--host {cfg.host!r} 不是 IP 地址，而 ais_bench 的 host_ip 字段只接受 "
-                "IPv4/IPv6（否则报 UTILS-CFG-002 校验失败）。若目标是域名/容器别名，"
-                "请先解析成 IP 再传入，或改用 --url 指定完整 baseUrl。")
+        if parsed.use_url_field:
+            self.on_event(f"寻址方式：ais_bench url 字段 = {cfg.url}"
+                          f"（host_ip 写 localhost 以通过校验；原始输入 {parsed.raw!r}）")
+        else:
+            self.on_event(f"寻址方式：ais_bench host_ip={cfg.host} host_port={cfg.port}"
+                          f"（原始输入 {parsed.raw!r}）")
 
     # ---------------------------------------------------------------- 单点
     def _run_phase(self, run_dir: str, tag: str, concurrency: int, output_len: int,
