@@ -531,6 +531,19 @@ async def sim_reset():
     return {"ok": True}
 
 
+@app.post("/reset_prefix_cache")
+async def reset_prefix_cache():
+    """清空两级前缀缓存（对齐 vLLM 的 POST /reset_prefix_cache；本副本补充）。
+
+    注意只清 trie、不清 Prometheus 累计计数器——与真实 vLLM 行为一致，
+    工具侧一律按快照差分口径统计。
+    """
+    global _hbm_trie, _ext_trie
+    _hbm_trie = PrefixCacheTrie()
+    _ext_trie = PrefixCacheTrie()
+    return {"status": "ok"}
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok"}

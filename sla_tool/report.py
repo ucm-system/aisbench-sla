@@ -119,6 +119,8 @@ def print_summary(result: SearchResult, cfg) -> None:
     if best_ok and (not peak or best_ok["concurrency"] != peak["concurrency"]):
         print(f"  SLA 内最高吞吐：{best_ok['value']:.1f} tok/s @ 并发={best_ok['concurrency']}")
     print(f"  状态：{result.status}（退出码 {result.exit_code}）")
+    for warning in result.warnings:
+        print(f"  注意：{warning}")
     if result.dataset_info:
         print(f"  数据集：{result.dataset_info.get('dataset_path', '')}")
     print("=" * 118)
@@ -137,7 +139,7 @@ def print_dry_run(cfg) -> None:
 
 # --------------------------------------------------------------------- 落盘
 CSV_FIELDS = [
-    "kind", "concurrency", "output_len", "verdict", "reason",
+    "kind", "concurrency", "seed", "output_len", "verdict", "reason",
     "ttft_avg_ms", "ttft_p90_ms", "tpot_avg_ms", "tpot_p90_ms", "e2el_p90_ms",
     "output_token_throughput", "request_throughput_qps", "total_requests",
     "measured_concurrency", "hbm_hit_rate", "ext_hit_rate", "hit_rate_note",
@@ -192,6 +194,7 @@ def write_summary(out_dir: str, cfg, result: SearchResult) -> str:
                      "dataset_type": cfg.dataset_type},
         "dataset": result.dataset_info,
         "duration_s": round(result.finished_at - result.started_at, 1),
+        "warnings": list(result.warnings),
         "throughput": throughput_summary(result.points),
         "points": [point.as_row() for point in result.points],
     }

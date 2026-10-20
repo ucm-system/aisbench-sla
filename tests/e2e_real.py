@@ -106,6 +106,10 @@ def build_command(args) -> list[str]:
         "--tolerance", str(args.tolerance),
         "--point-timeout", str(args.point_timeout),
     ]
+    if args.reset_cache:
+        common.append("--reset-cache")
+    if args.seed_per_point:
+        common.append("--seed-per-point")
     if args.no_docker:
         work = str(Path(out, "work").resolve())
         os.makedirs(work, exist_ok=True)
@@ -178,6 +182,12 @@ def evaluate(args, summary: dict, exit_code: int) -> None:
     check(all((p.get("hbm_hit_rate") or 0) > 0 for p in probes),
           "每个探测点都算出了命中率（快照差分链路通）",
           f"min={min((p.get('hbm_hit_rate') or 0) for p in probes):.2%}" if probes else "无点")
+    rates = [p["hbm_hit_rate"] for p in probes if p.get("hbm_hit_rate") is not None]
+    if args.assert_no_saturation and rates:
+        check(max(rates) < 0.99, "命中率未饱和（各点 <99%）",
+              f"max={max(rates):.2%}（若饱和说明缓存未复位/数据集未更换）")
+        check(not summary.get("warnings"), "无「命中率不可比」告警",
+              "；".join(summary.get("warnings") or []) or "无")
     peak = (summary.get("throughput") or {}).get("peak") or {}
     check(bool(peak) and peak.get("value", 0) > 0, "报告了最高输出吞吐",
           f"{peak.get('value', 0):.1f} tok/s @ c={peak.get('concurrency')}")
@@ -227,6 +237,13 @@ def main() -> int:
     parser.add_argument("--expect-max-ok", type=int, default=0,
                         help="指定则严格断言最大并发（0=只断言搜索性质，如单调性与二分收敛）")
     parser.add_argument("--no-docker", action="store_true", help="不依赖 Docker，用确定性桩")
+    parser.add_argument("--reset-cache", action="store_true",
+                        help="透传 --reset-cache：每点前 POST /reset_prefix_cache")
+    parser.add_argument("--seed-per-point", action="store_true",
+                        help="透传 --seed-per-point：每点换 seed 生成独立数据集")
+    parser.add_argument("--assert-no-saturation", action="store_true",
+                        help="断言各点命中率未饱和（<99%）且无「不可比」告警，"
+                             "配合 --reset-cache / --seed-per-point 使用")
     parser.add_argument("--keep", action="store_true", help="保留 mock 进程与输出目录")
     args = parser.parse_args()
     if args.no_docker:

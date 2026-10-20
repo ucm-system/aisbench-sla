@@ -90,7 +90,10 @@ def add_env_opts(parser: argparse.ArgumentParser) -> None:
     group.add_argument("--prefix-warmup", choices=["none", "once", "per-point"],
                        help="前缀预热时机（默认 per-point）")
     group.add_argument("--reset-cache", action="store_true", default=None,
-                       help="每点前调用 POST /reset_prefix_cache")
+                       help="每点前调用 POST /reset_prefix_cache（保证各点缓存状态可比）")
+    group.add_argument("--seed-per-point", action="store_true", default=None,
+                       help="每个探测点用 seed+i 重新生成数据集：各点前缀都是新的，"
+                            "即使服务不支持缓存复位也能避免命中率逐点饱和（代价：每点重生成数据集）")
     group.add_argument("--dry-run", action="store_true", default=None,
                        help="只打印计划，不真正压测")
 

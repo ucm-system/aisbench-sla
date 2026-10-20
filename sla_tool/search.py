@@ -36,6 +36,7 @@ class PointResult:
     elapsed_s: float = 0.0
     log_path: str = ""
     run_dir: str = ""
+    seed: int = 0
     metrics: Dict[str, float] = field(default_factory=dict)
     hit_rate: Dict[str, object] = field(default_factory=dict)
     gauges: Dict[str, float] = field(default_factory=dict)
@@ -70,6 +71,7 @@ class PointResult:
         return {
             "kind": self.kind,
             "concurrency": self.concurrency,
+            "seed": self.seed,
             "output_len": self.output_len,
             "verdict": "PASS" if self.ok else "FAIL",
             "reason": self.reason,
@@ -99,6 +101,7 @@ class SearchResult:
     status: str = "ok"          # ok | preflight_failed | none_passed | max_unbounded
                                 # | dry_run | error
     note: str = ""
+    warnings: List[str] = field(default_factory=list)
     dataset_info: Dict[str, str] = field(default_factory=dict)
     started_at: float = 0.0
     finished_at: float = 0.0
@@ -122,6 +125,7 @@ class SlaSearch:
         self.on_point = on_point
         self.on_event = on_event or (lambda message: logger.info("%s", message))
         self.full_probes = 0
+        self._probe_seq = 0
         self._warmup_done = False
         self.prefix_path = ""
         self.dataset_path = ""
@@ -157,9 +161,31 @@ class SlaSearch:
             result.error = str(exc)
         finally:
             result.finished_at = time.time()
+            self._collect_warnings(result)
             if result.status in ("ok", "none_passed", "max_unbounded"):
                 self._finalize_note(result)
         return result
+
+    def _collect_warnings(self, result: SearchResult) -> None:
+        """识别「命中率逐点饱和」：各点缓存状态不同会让命中率失去可比性。
+
+        典型成因：同一份数据集在探测点之间反复播放，缓存(即使被预热过)会逐步累积
+        到整行命中 -> 命中率趋近 100%，首点与后续点不可比。
+        """
+        rates = [(p.concurrency, (p.hit_rate or {}).get("hbm_hit_rate"))
+                 for p in result.points if p.kind != "warmup"]
+        rates = sorted((c, float(r)) for c, r in rates if r is not None)
+        if len(rates) < 3:
+            return
+        first_rate, last_rate = rates[0][1], rates[-1][1]
+        saturated = sum(1 for _, r in rates if r >= 0.99)
+        if saturated >= 2 and last_rate - first_rate > 0.05:
+            fix = ("--reset-cache（服务需支持 POST /reset_prefix_cache）"
+                   if not self.cfg.reset_cache else "--seed-per-point")
+            result.warnings.append(
+                f"命中率逐点上升并趋近 100%（首点 {first_rate:.1%} → 末点 {last_rate:.1%}，"
+                f"{saturated}/{len(rates)} 个点 ≥99%）：缓存未在探测点之间复位，"
+                f"各点的缓存状态不同、命中率不可直接比较。前缀缓存口径建议加 {fix}。")
 
     # ---------------------------------------------------------------- 准备
     def _prepare(self) -> None:
@@ -231,27 +257,63 @@ class SlaSearch:
         parsed, _ = parse_aisbench_log(log_path, npu_num=cfg.npu_num)
         return command_result, parsed, hit, gauges
 
+    def _point_dataset(self, concurrency: int) -> tuple:
+        """该探测点使用的（前缀文件, 数据集, seed）。
+
+        `--seed-per-point` 下每点换 seed 生成独立数据集：各点前缀对缓存而言都是新的，
+        即便服务不支持 /reset_prefix_cache，命中率也不会因复用同一份数据集而逐点饱和。
+        代价是每点都要重新生成数据集（64K 长上下文尤其明显）。
+        """
+        cfg = self.cfg
+        seed = cfg.seed + self._probe_seq
+        if not cfg.seed_per_point:
+            return self.prefix_path, self.dataset_path, cfg.seed
+        save_path = os.path.join(cfg.output_dir, "datasets", f"seed{seed}")
+        prefix_path, dataset_path = dataset.create_multi_prefix_dataset(
+            tokenizer_path=cfg.model_path,
+            input_len=cfg.input_len,
+            number=cfg.data_num,
+            save_path=save_path,
+            prefix_flag=1 if cfg.dataset_type == "prefix_cache" else 0,
+            dp=cfg.dp,
+            repeat_rate=cfg.repeat_rate,
+            seed=seed,
+            prefix_num=cfg.prefix_num,
+            length_mean=cfg.length_mean,
+            length_std=cfg.length_std,
+            length_min=cfg.length_min,
+            length_max=cfg.length_max,
+            gsm8k_source=cfg.gsm8k_source,
+        )
+        self.on_event(f"[c={concurrency}] --seed-per-point：用 seed={seed} 生成独立数据集"
+                      f"（前缀对缓存是新的，各点命中率可比）")
+        return prefix_path, dataset_path, seed
+
     def _probe(self, concurrency: int, kind: str = "probe") -> PointResult:
         cfg = self.cfg
         started = time.time()
         run_dir = os.path.join(cfg.output_dir, "points", f"c{concurrency}")
         os.makedirs(run_dir, exist_ok=True)
+        point_prefix, point_dataset, point_seed = self._point_dataset(concurrency)
+        self._probe_seq += 1
         point = PointResult(concurrency=concurrency, kind=kind, run_dir=run_dir,
-                           output_len=cfg.output_len)
+                            output_len=cfg.output_len, seed=point_seed)
 
         if cfg.reset_cache:
-            metrics.reset_prefix_cache(cfg.base_url(), cfg.api_key)
+            ok = metrics.reset_prefix_cache(cfg.base_url(), cfg.api_key)
+            self.on_event(f"[c={concurrency}] 缓存复位 {'成功' if ok else '失败/不支持（继续）'}"
+                          "—— 保证各点从同一缓存状态起测")
 
         # ---- 前缀预热阶段 ----
         do_warmup = (cfg.dataset_type == "prefix_cache" and cfg.prefix_warmup != "none"
-                     and bool(self.prefix_path))
+                     and bool(point_prefix))
         if do_warmup and cfg.prefix_warmup == "once" and self._warmup_done:
             do_warmup = False
         if do_warmup:
             warm_c = cfg.dp if cfg.dp > 1 else cfg.prefix_num
             self.on_event(f"[c={concurrency}] 前缀预热阶段（并发={warm_c}, output_len=1）")
             warm_result, _, warm_hit, _ = self._run_phase(
-                run_dir, "warmup", warm_c, 1, 0.0, self.prefix_path)
+                run_dir, "warmup", warm_c, 1, 0.0, point_prefix)
             point.warmup_hit_rate = warm_hit.hbm_hit_rate
             self._warmup_done = True
             if not warm_result.ok:
@@ -263,7 +325,7 @@ class SlaSearch:
                       f"request_rate={cfg.request_rate}）")
         command_result, parsed, hit, gauges = self._run_phase(
             run_dir, "full", concurrency, cfg.output_len, cfg.request_rate,
-            self.dataset_path)
+            point_dataset)
         point.returncode = command_result.returncode
         point.log_path = os.path.join(run_dir, "full.log")
         point.elapsed_s = time.time() - started
