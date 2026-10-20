@@ -90,10 +90,12 @@ def add_env_opts(parser: argparse.ArgumentParser) -> None:
     group.add_argument("--prefix-warmup", choices=["none", "once", "per-point"],
                        help="前缀预热时机（默认 per-point）")
     group.add_argument("--reset-cache", action="store_true", default=None,
-                       help="每点前调用 POST /reset_prefix_cache（保证各点缓存状态可比）")
+                       help="每点前 POST /reset_prefix_cache —— 注意：vLLM 该端点属调试接口，"
+                            "需 VLLM_SERVER_DEV_MODE=1 才存在；且只清显存侧缓存，"
+                            "测外部缓存(UCM)命中时无效。各点可比性请优先用 --seed-per-point")
     group.add_argument("--seed-per-point", action="store_true", default=None,
-                       help="每个探测点用 seed+i 重新生成数据集：各点前缀都是新的，"
-                            "即使服务不支持缓存复位也能避免命中率逐点饱和（代价：每点重生成数据集）")
+                       help="【推荐】每个探测点用 seed+i 重新生成数据集：各点前缀都是新的，"
+                            "HBM 与外部缓存都从干净状态起测，命中率各点可比（代价：每点重生成数据集）")
     group.add_argument("--dry-run", action="store_true", default=None,
                        help="只打印计划，不真正压测")
 

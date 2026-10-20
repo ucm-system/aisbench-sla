@@ -243,18 +243,31 @@ class GaugeSampler:
                 "samples": self.samples}
 
 
-def reset_prefix_cache(base_url: str, api_key: str = "", timeout: float = 10.0) -> bool:
-    """POST /reset_prefix_cache（服务不支持时返回 False，不视为错误）。"""
+def reset_prefix_cache(base_url: str, api_key: str = "", timeout: float = 10.0) -> Tuple[bool, str]:
+    """POST /reset_prefix_cache —— 返回 (是否成功, 说明)。
+
+    重要限制（真实 vLLM）：
+    * 该端点属于**调试接口**，服务需以 `VLLM_SERVER_DEV_MODE=1` 启动才存在，
+      默认关闭；未开启时通常返回 404/405。
+    * 即便可用，它清的是**显存侧（HBM）前缀缓存**；外部缓存（UCM 等）里的前缀仍在，
+      因此**测「外部命中」时清显存没有意义**（清完显存，外部依旧命中）。
+    需要各探测点命中率可比时，优先用 `--seed-per-point`（每点换前缀，通用且不依赖服务）。
+    """
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     try:
         response = _requests().post(f"{base_url.rstrip('/')}/reset_prefix_cache",
                                     headers=headers,
                                     proxies={"http": None, "https": None},
                                     timeout=timeout)
-        return response.status_code < 400
     except Exception as exc:  # noqa: BLE001
-        logger.warning("reset_prefix_cache 失败（忽略）：%s", exc)
-        return False
+        return False, f"请求失败：{type(exc).__name__}: {exc}"
+    if response.status_code in (404, 405, 501):
+        return False, (f"服务未提供 /reset_prefix_cache（HTTP {response.status_code}）——"
+                       "vLLM 该端点是调试接口，需 VLLM_SERVER_DEV_MODE=1 启动；"
+                       "建议改用 --seed-per-point")
+    if response.status_code >= 400:
+        return False, f"HTTP {response.status_code}"
+    return True, "已复位显存侧前缀缓存（外部缓存不受影响）"
 
 
 def probe_service(base_url: str, api_key: str = "", timeout: float = 10.0

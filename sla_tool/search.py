@@ -180,12 +180,20 @@ class SlaSearch:
         first_rate, last_rate = rates[0][1], rates[-1][1]
         saturated = sum(1 for _, r in rates if r >= 0.99)
         if saturated >= 2 and last_rate - first_rate > 0.05:
-            fix = ("--reset-cache（服务需支持 POST /reset_prefix_cache）"
-                   if not self.cfg.reset_cache else "--seed-per-point")
+            if self.cfg.seed_per_point:
+                fix = ("当前已开 --seed-per-point，仍出现饱和说明各点前缀仍被复用，"
+                       "请检查数据集是否被沿用")
+            elif self.cfg.reset_cache:
+                fix = ("--seed-per-point（服务若未开调试模式 VLLM_SERVER_DEV_MODE=1，"
+                       "/reset_prefix_cache 不生效；且该端点只清显存，外部缓存命中不受影响）")
+            else:
+                fix = ("--seed-per-point（推荐：每点换前缀，不依赖服务支持，"
+                       "HBM 与外部缓存都从「该前缀从未出现过」起测；"
+                       "代价是每点重生成数据集）")
             result.warnings.append(
                 f"命中率逐点上升并趋近 100%（首点 {first_rate:.1%} → 末点 {last_rate:.1%}，"
                 f"{saturated}/{len(rates)} 个点 ≥99%）：缓存未在探测点之间复位，"
-                f"各点的缓存状态不同、命中率不可直接比较。前缀缓存口径建议加 {fix}。")
+                f"各点的缓存状态不同、命中率不可直接比较。建议加 {fix}。")
 
     # ---------------------------------------------------------------- 准备
     def _prepare(self) -> None:
@@ -203,7 +211,20 @@ class SlaSearch:
             self.prefix_path, self.dataset_path = (cfg.dataset, cfg.dataset)
             return
         self.prefix_path, self.dataset_path = dataset.ensure_dataset(cfg)
+        self._check_hit_rate_regime()
         metrics.wait_for_run_metrics(cfg.metrics_pods(), timeout=15.0)
+
+    def _check_hit_rate_regime(self) -> None:
+        """开跑前提示命中率的可比性风险（与其事后看告警，不如事前说清）。"""
+        cfg = self.cfg
+        if cfg.dataset_type != "prefix_cache" or cfg.seed_per_point or cfg.reset_cache:
+            return
+        self.on_event(
+            "提示：各探测点复用同一份数据集且未复位缓存 —— 第 1 点是冷缓存，后续点会因缓存"
+            "累积命中率逐点饱和到 ~100%，各点不可比。建议加 --seed-per-point"
+            "（推荐：每点换前缀，通用且不依赖服务，HBM 与外部缓存都从干净状态起测）；"
+            "--reset-cache 只在服务开了调试模式（vLLM 需 VLLM_SERVER_DEV_MODE=1）且只关心"
+            "显存缓存时才有用。")
 
     def _check_target_host(self) -> None:
         """报告最终寻址方式，并提醒 ais_bench 的 host_ip 校验限制。
@@ -300,9 +321,8 @@ class SlaSearch:
                             output_len=cfg.output_len, seed=point_seed)
 
         if cfg.reset_cache:
-            ok = metrics.reset_prefix_cache(cfg.base_url(), cfg.api_key)
-            self.on_event(f"[c={concurrency}] 缓存复位 {'成功' if ok else '失败/不支持（继续）'}"
-                          "—— 保证各点从同一缓存状态起测")
+            ok, detail = metrics.reset_prefix_cache(cfg.base_url(), cfg.api_key)
+            self.on_event(f"[c={concurrency}] 缓存复位{'成功' if ok else '未生效'}：{detail}")
 
         # ---- 前缀预热阶段 ----
         do_warmup = (cfg.dataset_type == "prefix_cache" and cfg.prefix_warmup != "none"

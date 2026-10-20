@@ -535,8 +535,11 @@ async def sim_reset():
 async def reset_prefix_cache():
     """清空两级前缀缓存（对齐 vLLM 的 POST /reset_prefix_cache；本副本补充）。
 
-    注意只清 trie、不清 Prometheus 累计计数器——与真实 vLLM 行为一致，
-    工具侧一律按快照差分口径统计。
+    注意两者差异：**真实 vLLM 的该端点属调试接口，需 VLLM_SERVER_DEV_MODE=1 才存在**，
+    且只清显存侧（HBM）前缀缓存；本 mock 为了可测性默认提供该端点并同时清空 ext trie。
+    真实环境里「测外部缓存命中」时清显存没有意义（外部缓存仍然命中），
+    需要各点可比请用工具的 --seed-per-point。只清 trie、不清 Prometheus 累计计数器——
+    与真实 vLLM 一致，工具侧一律按快照差分口径统计。
     """
     global _hbm_trie, _ext_trie
     _hbm_trie = PrefixCacheTrie()
