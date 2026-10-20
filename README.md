@@ -264,10 +264,34 @@ CLI 为 `/usr/local/bin/ais_bench`），数据集最终落在 `/benchmark/ais_be
 ## 测试
 
 ```bash
-py -3.11 tests/test_offline.py     # 离线：mock vLLM + 假 ais_bench，不需要 NPU/真实服务
+# 1) 纯离线（stdlib，不需要 NPU / Docker / 真实服务）：确定性桩 + 自建 mock
+py -3.11 tests/test_offline.py        # 17 个用例：指标契约、解析、SLA 边界搜索、失败分支
+
+# 2) 完整链路（真 ais_bench + 本仓库自带的 mock）
+py -3.11 tests/e2e_real.py --no-docker   # 不依赖 Docker：确定性桩 + vendored mock
+py -3.11 tests/e2e_real.py               # 默认：官方 ais_bench 镜像 + vendored mock
 ```
+
+`tests/e2e_real.py` 自己拉起 mock、跑一轮完整 SLA 搜索、再对结果做**性质断言**
+（不写死具体并发）：通过点/失败点都存在、**判定随并发单调**、最大并发等于通过点最大值、
+**二分收敛在容差内**、拐点两侧 TTFT 分居阈值两边、每个点都算出命中率、最高吞吐有值、
+CSV/JSON 落盘；`--expect-max-ok N` 可改为严格断言。
+
+**自带的 mock**（`tests/mocks/clawperf_mock_server.py`）是 ClawPerf 的 mock LLM 服务
+vendored 副本（Apache-2.0，全文见 `tests/mocks/LICENSE.ClawPerf`）：真 trie 前缀缓存、
+vLLM 风格 `/metrics`（`vllm:prefix_cache_*` / `external_prefix_cache_*`）、SSE 流式、
+在途请求 gauge。相对上游加了三处**测试用**扩展（文件头有说明）：
+
+- `--free-concurrency` / `--queue-ms`：**负载相关 TTFT 模型**——在途请求超过 free 后
+  每个 +queue-ms。上游 TTFT 恒定，真实压测跑不出延迟拐点，也就无法验证阶梯失败与二分；
+- `POST /__sim__/traffic`：直接累加缓存计数器，供确定性桩模拟流量；
+- `--ready-file` / `POST /__sim__/reset`：测试脚本等待就绪与复位。
+
+实测（官方镜像 + 该 mock，free=8 / queue-ms=250 / ttft=500，阈值 TTFT P90 1200ms）：
+阶梯 c=1/2/4/8 通过 → c=16 失败 → 二分 12（通过，1186ms）/ 14（失败）/ 13（失败）
+→ **最大并发 12**，边界缺口 1 在容差内；三次运行结论一致。
 
 ## License
 
-MIT（见 [LICENSE](LICENSE)）。移植自 [aisbench_auto_tools_prefix](https://github.com/rayn-zzz/aisbench_auto_tools_prefix)（MIT），
+MIT（见 [LICENSE](LICENSE)）。移植自 [aisbench_auto_tools_prefix](https://github.com/rayn-zzz/aisbench_auto_tools_prefix)（MIT）；
 致谢与移植范围见 LICENSE 与各文件头部注释。

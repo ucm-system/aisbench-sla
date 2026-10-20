@@ -63,6 +63,10 @@ class PointResult:
 
     def as_row(self) -> Dict[str, object]:
         hit = self.hit_rate or {}
+        notes = list(hit.get("notes") or [])
+        skipped = list(hit.get("skipped_pods") or [])
+        if skipped:
+            notes.append("指标未取到（快照不完整）：" + ",".join(skipped))
         return {
             "kind": self.kind,
             "concurrency": self.concurrency,
@@ -80,6 +84,7 @@ class PointResult:
             "measured_concurrency": self.metrics.get("measured_concurrency", -1),
             "hbm_hit_rate": hit.get("hbm_hit_rate"),
             "ext_hit_rate": hit.get("ext_hit_rate"),
+            "hit_rate_note": "；".join(notes),
             "warmup_hit_rate": self.warmup_hit_rate,
             "max_running": self.gauges.get("max_running", 0),
             "elapsed_s": round(self.elapsed_s, 1),

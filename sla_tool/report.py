@@ -140,8 +140,8 @@ CSV_FIELDS = [
     "kind", "concurrency", "output_len", "verdict", "reason",
     "ttft_avg_ms", "ttft_p90_ms", "tpot_avg_ms", "tpot_p90_ms", "e2el_p90_ms",
     "output_token_throughput", "request_throughput_qps", "total_requests",
-    "measured_concurrency", "hbm_hit_rate", "ext_hit_rate", "warmup_hit_rate",
-    "max_running", "elapsed_s", "log_path",
+    "measured_concurrency", "hbm_hit_rate", "ext_hit_rate", "hit_rate_note",
+    "warmup_hit_rate", "max_running", "elapsed_s", "log_path",
 ]
 
 

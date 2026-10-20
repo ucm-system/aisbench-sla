@@ -80,18 +80,30 @@ def parse_metrics(text: str) -> Dict[str, Dict[str, float]]:
     return result
 
 
-def snapshot_pods(pods: List[str], timeout: float = 10.0
-                  ) -> Dict[str, Dict[str, Dict[str, float]]]:
-    """→ {pod: {engine: counters}}；抓取失败的 pod 记为 {}。"""
+def snapshot_pods(pods: List[str], timeout: float = 10.0,
+                  retries: int = 1) -> Dict[str, Dict[str, Dict[str, float]]]:
+    """→ {pod: {engine: counters}}；抓取失败的 pod 记为 {}。
+
+    抓取失败会重试（默认 1 次）：/metrics 偶发超时不该让整个探测点的命中率
+    无声变成空白——重试后仍失败则由 diff_snapshots 记入 skipped/notes，
+    最终在报告里以「指标未取到」而非空白呈现。
+    """
     result: Dict[str, Dict[str, Dict[str, float]]] = {}
     for pod in pods:
         host, _, port = pod.rpartition(":")
         if not host:
             host, port = pod, "80"
-        try:
-            result[pod] = parse_metrics(fetch_metrics_text(host, port, timeout))
-        except Exception as exc:  # noqa: BLE001 - 单个 pod 失败不影响其他
-            logger.warning("抓取 %s 指标失败：%s", pod, exc)
+        last_error = ""
+        for attempt in range(retries + 1):
+            try:
+                result[pod] = parse_metrics(fetch_metrics_text(host, port, timeout))
+                break
+            except Exception as exc:  # noqa: BLE001 - 单个 pod 失败不影响其他
+                last_error = f"{type(exc).__name__}: {exc}"
+                if attempt < retries:
+                    time.sleep(0.5)
+        else:
+            logger.warning("抓取 %s 指标失败（已重试 %d 次）：%s", pod, retries, last_error)
             result[pod] = {}
     return result
 
