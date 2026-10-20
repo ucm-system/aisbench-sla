@@ -4,58 +4,34 @@ AISBench 前缀缓存 **SLA 自动调优 CLI**：预检 → 指数阶梯 → 二
 
 ## 快速开始
 
-启动横幅（figlet 大字 + 运行配置框，`--no-banner` 可关）：
-
-```
-     _      ___   ____    ____                          _         ____    _          _
-    / \    |_ _| / ___|  | __ )    ___   _ __     ___  | |__     / ___|  | |        / \
-   / _ \    | |  \___ \  |  _ \   / _ \ | '_ \   / __| | '_ \    \___ \  | |       / _ \
-  / ___ \   | |   ___) | | |_) | |  __/ | | | | | (__  | | | |    ___) | | |___   / ___ \
- /_/   \_\ |___| |____/  |____/   \___| |_| |_|  \___| |_| |_|   |____/  |_____| /_/   \_\
-  AISBench 前缀缓存 SLA 自动调优 CLI ┃ 预检 → 阶梯 → 二分
-╔══════════════════════════════════════════════════════════════════════════════════════════════════╗
-║ 运行配置                                                                                         ║
-╠══════════════════════════════════════════════════════════════════════════════════════════════════╣
-║   目标服务    http://10.0.0.5:8000     模型 my-model                                             ║
-║   负载形态    输入 2048 / 输出 32 / 160 条    请求频率 3 RPS                                     ║
-║   SLA 口径    TTFT AVG <= 1200ms；TPOT AVG <= 30ms                                               ║
-║   搜索策略    并发 8 → 256（阶梯 ×2 + 二分，容差 1）    探测预算 20 点    二分上限 5 次          ║
-╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
-```
-
-横幅字体取自 [patorjk TAAG](https://patorjk.com/software/taag/) 的 figlet `Standard`
-（与 AISBench 自身横幅同款）；换字体：
+在 ais_bench 官方镜像里跑**无需安装任何依赖**（requests 2.33 / transformers 4.57 镜像已自带；
+只有把工具拿到宿主机上跑才需要 `pip install requests`，生成数据集另需 `transformers`）。
 
 ```bash
-py -3.11 tools/make_banner.py "AISBench SLA" "ANSI Shadow" --python-literal   # 输出粘进 sla_tool/banner.py
-```
-
-```bash
-pip install requests          # 生成数据集还需 transformers（ais_bench 容器已自带）
-```
-
-```bash
-python3 sla_search.py search \
-    --target 10.0.0.5:8000 \
+docker run --rm --add-host=host.docker.internal:host-gateway \
+  -v $PWD:/tool -v /data/datasets:/data/datasets -v /weights/my-model:/weights/my-model:ro \
+  ghcr.io/aisbench/aisbench_benchmark:v3.1-20260330-master_x86_64_py_310 \
+  python3 /tool/sla_search.py search \
+    --target host.docker.internal:8000 \
     --model my-model --model-path /weights/my-model \
     --work-path /benchmark --dataset-path /data/datasets \
     --input-len 2048 --output-len 32 --data-num 160 \
     --dataset-type prefix_cache --prefix-num 1 --repeat-rate 90% --dp 1 \
     --sla ttft.avg:1200 --sla tpot.avg:30 \
-    --start 8 --max 256 --output-dir ./sla_out
+    --start 8 --max 256 --output-dir /tool/sla_out
 ```
 
-其余两个子命令：
+已经在容器里（或宿主机直连）时，去掉 `docker run` 那几行即可。三个子命令：
 
 ```bash
-python3 sla_search.py point   --target ... --concurrency 64                     # 单并发点压测
-python3 sla_search.py dataset --model-path /weights/my-model --input-len 2048   # 只生成数据集
+python3 sla_search.py search   ...                              # 搜最大并发与最高吞吐
+python3 sla_search.py point    ... --concurrency 64              # 单并发点压测
+python3 sla_search.py dataset  --model-path /weights/my-model --input-len 2048   # 只生成数据集
 ```
 
 * `--work-path` 是 ais_bench 源码根（官方镜像里为 `/benchmark`），`--dataset-path` 是数据集落盘目录。
 * `--target` 收 `IP:PORT` / `host:port` / `http(s)://host[:port][/path]`，自动转成 ais_bench 需要的字段。
-* 容器内访问宿主机服务：`--target host.docker.internal:8000`。
-* `--model-path` 必填（ais_bench 模型配置需要 tokenizer，即使已用 `--dataset`）。
+* `--model-path` 必填（ais_bench 模型配置需要 tokenizer，即使已用 `--dataset` 指定数据集）。
 
 ## 示例：64K 输入 / 1K 输出 / 90% 命中，找最大并发与最高吞吐
 
@@ -125,17 +101,14 @@ python3 sla_search.py search \
 sla_out/
 ├── sla_points.csv      每点一行：并发/判定/各项统计量/吞吐/命中率/实测并发/峰值在途/日志路径
 ├── sla_summary.json    结论、SLA 口径、全部探测点
-├── aisbench_all.log    本轮所有相位拼接的 ais_bench 原始输出
+├── run.log             工具自身日志（本次运行覆盖）
+├── aisbench_all.log    工具消息 + 各阶段 ais_bench 原始输出（追加）
 ├── datasets/           数据集（默认 seed<N>/ 每点一份，可复用）
 └── points/c<N>/        warmup.log、full.log（原始 ais_bench 日志）
 ```
 
-ais_bench 的输出**实时打印到终端**（同时写入 `points/c<N>/*.log`，并回拷一份到它的 exp 目录）；
-不想刷屏用 `--no-stream`。
-
-终端里每轮探测用 `***` 分隔框标出（`第 n/N 次探测 ┃ 并发 c=… ┃ 数据集 seed=…`），
-预热阶段与测试阶段各有分节线（标注是否计入 SLA 判定），ais_bench 自身的 INFO/WARNING 颜色原样保留。
-颜色只在终端启用（`--color never` 关闭），**日志文件始终是纯文本**，方便 grep。
+ais_bench 的输出实时打印在终端，同时按阶段落盘并回拷到它自己的 exp 目录；`--no-stream` 可只落盘不刷屏。
+终端里每轮探测与预热/测试阶段都有分隔线，ais_bench 的 INFO/WARNING 颜色原样保留；日志文件始终是纯文本。
 
 ## 参数速查
 
@@ -145,7 +118,7 @@ ais_bench 的输出**实时打印到终端**（同时写入 `points/c<N>/*.log`�
 | `--model` / `--model-path` / `--api-key` | 服务端模型名 / tokenizer 路径（必填）/ 鉴权 |
 | `--pods` | 采集 `/metrics` 的端点，逗号分隔（PD 分离填各 P 节点，默认同 target） |
 | `--input-len` / `--output-len` / `--data-num` | 负载形态；`--data-num` 建议 `--max` 的 2~4 倍 |
-| `--request-rate` | 请求频率（RPS，默认 **3**，`0` = 不限速），写进 ais_bench 模型配置的 `request_rate`。**注意**：在途并发 ≈ `频率 × 时延`，所以频率太低会把瓶颈从并发变成频率（例如 3 RPS + 0.5s 时延 → 实测并发只有 ~1.5），此时工具会告警；要测并发上限就设 `0` |
+| `--request-rate` | 请求频率（RPS，默认 3，`0` = 不限速）；写进 ais_bench 模型配置的 `request_rate`。频率太低会把瓶颈从并发变成频率，此时工具会告警 |
 | `--dataset-type` | `prefix_cache`（默认）/ `normal` |
 | `--prefix-num` / `--repeat-rate` / `--seed` / `--dp` | 前缀数据集参数（`--repeat-rate` 支持 `90%` 或 `0.9`） |
 | `--length-mean/std/min/max` | 变长输入（高斯或均匀分布） |
@@ -159,9 +132,8 @@ ais_bench 的输出**实时打印到终端**（同时写入 `points/c<N>/*.log`�
 | `--dataset-path` / `--output-dir` | 数据集目录 / 结果目录 |
 | `--aisbench-cmd` / `--aisbench-extra-args` | 替换 / 追加 ais_bench 命令 |
 | `--point-timeout` | 单点超时秒数（超时终止进程树） |
-| `--no-stream` | 不把 ais_bench 输出实时打到终端（仍写入日志文件） |
-| `--color` / `--no-color` | 终端颜色 `auto`（默认，仅 TTY）/ `always` / `never`；日志文件始终纯文本 |
-| `--no-banner` | 不打印启动大字横幅与运行配置框 |
+| `--no-stream` / `--no-banner` | 不实时打印 ais_bench 输出 / 不打印启动横幅 |
+| `--color` / `--no-color` | 终端颜色 `auto`（默认，仅 TTY）/ `always` / `never` |
 | `--no-num-warmups` | 不附加 `--num-warmups 0`（老版本 ais_bench） |
 | `--dry-run` | 只打印探测计划 |
 | `--config` | JSON 配置文件（CLI 参数优先） |
@@ -171,7 +143,7 @@ ais_bench 的输出**实时打印到终端**（同时写入 `points/c<N>/*.log`�
 ```bash
 py -3.11 tests/test_cli_surface.py      # CLI 表面（--help、报错可读）
 py -3.11 tests/test_offline.py          # 离线：确定性桩 + 自建 mock
-py -3.11 tests/e2e_matrix.py            # 端到端矩阵（11 个场景：超时/退出码/多约束/配置…）
+py -3.11 tests/e2e_matrix.py            # 端到端矩阵（13 个场景：超时/退出码/多约束/配置…）
 py -3.11 tests/e2e_real.py --no-docker  # 离线全链路
 py -3.11 tests/e2e_real.py              # 真实 ais_bench 镜像 + 自带 mock
 ```
