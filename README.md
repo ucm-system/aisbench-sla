@@ -331,5 +331,13 @@ vLLM 风格 `/metrics`（`vllm:prefix_cache_*` / `external_prefix_cache_*`）、
 
 ## License
 
-MIT（见 [LICENSE](LICENSE)）。移植自 [aisbench_auto_tools_prefix](https://github.com/rayn-zzz/aisbench_auto_tools_prefix)（MIT）；
+本项目自有代码：[MIT](LICENSE)。
+
+第三方代码与数据的来源、许可与收录范围见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)：
+
+- [aisbench_auto_tools_prefix](https://github.com/rayn-zzz/aisbench_auto_tools_prefix)（MIT）——
+  数据集生成、ais_bench 调用方式、命中率口径、日志解析规则
+- AISBench_PrefixTest_Tools（Apache-2.0）—— ais_bench 输出解析与 SLA 搜索策略
+- ClawPerf（Apache-2.0）—— `tests/mocks/` 下的 mock 服务（仅测试用）
+- GSM8K（MIT）—— `sla_tool/GSM8K.jsonl` 参考语料
 致谢与移植范围见 LICENSE 与各文件头部注释。

@@ -19,25 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
--------------------------------------------------------------------------------
-本软件包含源自下列项目的代码（均以 MIT 许可发布），特此致谢：
-
-1. aisbench_auto_tools_prefix — https://github.com/rayn-zzz/aisbench_auto_tools_prefix
-   MIT License, Copyright (c) rayn-zzz
-   移植部分：前缀缓存数据集生成（generate_dataset.py / data_picker.py）、
-   ais_bench 模型配置模板（default_api.py）、vLLM 前缀缓存命中率抓取
-   （cal_prefix_hit_rate.py）、ais_bench 汇总日志解析规则（save_file.py）。
-   原始许可证全文见 LICENSE.ref。
-
-2. AISBench_PrefixTest_Tools（本项目作者）
-   移植部分：ais_bench 输出解析（sidecar/app/result_parse.py）、SLA 搜索策略
-   （sidecar/app/sla.py）。
-
-3. ClawPerf — mock LLM 服务
-   Apache License 2.0（全文见 tests/mocks/LICENSE.ClawPerf）
-   收录部分：tests/mocks/clawperf_mock_server.py（vendored 副本，用于完整链路测试；
-   相对上游新增负载相关 TTFT 模型与 /__sim__ 测试端点，见文件头说明）。
-
-随附的 GSM8K.jsonl 取自公开的 GSM8K 数据集（MIT License, OpenAI），
-作为生成压测数据集的参考语料。
