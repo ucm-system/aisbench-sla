@@ -21,9 +21,12 @@ from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional
 
 from . import aisbench, dataset, metrics
-from .parse import parse_aisbench_log, looks_like_bad_num_warmups
+from .parse import METRIC_DEFAULTS, parse_aisbench_log, looks_like_bad_num_warmups
 
 logger = logging.getLogger(__name__)
+
+# 汇总/CSV 里导出的全部指标键（= ais_bench 汇总表提供的统计量）
+ALL_METRIC_KEYS = tuple(METRIC_DEFAULTS.keys())
 
 
 @dataclass
@@ -45,21 +48,14 @@ class PointResult:
 
     # ------------------------------------------------------------- SLA 判定
     def failing_keys(self, cfg) -> List[str]:
+        """按配置的 SLA 规则逐条判定，返回未满足项的可读说明。"""
         bad: List[str] = []
         if self.returncode not in (0, None):
             bad.append(f"进程退出码 {self.returncode}")
-        if cfg.ttft_p90 is not None:
-            value = self.metrics.get("ttft_p90_ms", -1)
-            if value is None or value < 0:
-                bad.append("TTFT P90 无数据")
-            elif value > cfg.ttft_p90:
-                bad.append(f"TTFT P90 {value:.0f} > {cfg.ttft_p90:.0f}")
-        if cfg.tpot_p90 is not None:
-            value = self.metrics.get("tpot_p90_ms", -1)
-            if value is None or value < 0:
-                bad.append("TPOT P90 无数据")
-            elif value > cfg.tpot_p90:
-                bad.append(f"TPOT P90 {value:.0f} > {cfg.tpot_p90:.0f}")
+        for rule in cfg.sla_rules():
+            ok, detail = rule.check(self.metrics)
+            if not ok:
+                bad.append(detail)
         return bad
 
     def as_row(self) -> Dict[str, object]:
@@ -68,18 +64,13 @@ class PointResult:
         skipped = list(hit.get("skipped_pods") or [])
         if skipped:
             notes.append("指标未取到（快照不完整）：" + ",".join(skipped))
-        return {
+        row: Dict[str, object] = {
             "kind": self.kind,
             "concurrency": self.concurrency,
             "seed": self.seed,
             "output_len": self.output_len,
             "verdict": "PASS" if self.ok else "FAIL",
             "reason": self.reason,
-            "ttft_avg_ms": self.metrics.get("ttft_avg_ms", -1),
-            "ttft_p90_ms": self.metrics.get("ttft_p90_ms", -1),
-            "tpot_avg_ms": self.metrics.get("tpot_avg_ms", -1),
-            "tpot_p90_ms": self.metrics.get("tpot_p90_ms", -1),
-            "e2el_p90_ms": self.metrics.get("e2el_p90_ms", -1),
             "output_token_throughput": self.metrics.get("output_token_throughput", -1),
             "request_throughput_qps": self.metrics.get("request_throughput_qps", -1),
             "total_requests": self.metrics.get("total_requests", -1),
@@ -92,6 +83,10 @@ class PointResult:
             "elapsed_s": round(self.elapsed_s, 1),
             "log_path": self.log_path,
         }
+        # ais_bench 汇总表里的全部统计量（avg/min/max/median/p50/p75/p90/p99 …）
+        for key in ALL_METRIC_KEYS:
+            row.setdefault(key, self.metrics.get(key, -1))
+        return row
 
 
 @dataclass
@@ -450,6 +445,7 @@ class SlaSearch:
             result.status = "ok"
 
     def _finalize_note(self, result: SearchResult) -> None:
+        cfg = self.cfg
         if result.note:
             return
         passing = [p for p in result.points if p.ok and p.kind != "preflight"]
@@ -458,9 +454,9 @@ class SlaSearch:
             best = max(passing, key=lambda p: p.concurrency) if passing else None
             detail = ""
             if best:
-                detail = (f"（TTFT P90 {best.metrics.get('ttft_p90_ms', -1):.0f}ms，"
-                          f"TPOT P90 {best.metrics.get('tpot_p90_ms', -1):.0f}ms，"
-                          f"HBM 命中率 {self._pct(best.hit_rate.get('hbm_hit_rate'))}）")
+                from . import sla_spec
+                detail = ("（" + sla_spec.describe_values(cfg.sla_rules(), best.metrics) +
+                          f"，HBM 命中率 {self._pct(best.hit_rate.get('hbm_hit_rate'))}）")
             result.note = f"SLA 内最大并发 = {result.max_ok}{detail}"
             if failing:
                 first_bad = min(failing, key=lambda p: p.concurrency)

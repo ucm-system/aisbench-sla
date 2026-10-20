@@ -98,8 +98,12 @@ class Config:
     verbose: bool = False
 
     # ---- SLA 与搜索 ----
-    ttft_p90: Optional[float] = None   # ms
-    tpot_p90: Optional[float] = None   # ms
+    # 规范键 → 阈值，如 {"ttft_p90": 2000, "tpot_avg": 30, "output_token_throughput_avg": 500}
+    # 键由 sla_spec 解析（metric_agg），延迟为上限、吞吐为下限，多条 AND。
+    sla: Dict[str, float] = field(default_factory=dict)
+    sla_direction: Dict[str, bool] = field(default_factory=dict)  # 显式方向覆盖（可选）
+    ttft_p90: Optional[float] = None   # 兼容旧参数：等价 sla.ttft_p90（ms）
+    tpot_p90: Optional[float] = None   # 兼容旧参数：等价 sla.tpot_p90（ms）
     start: int = 1
     max_concurrency: int = 256
     tolerance: int = 1                 # 二分收敛容差（并发数）
@@ -129,6 +133,20 @@ class Config:
 
     def normalize(self) -> None:
         self.repeat_rate = parse_prefix_ratio(self.repeat_rate)
+        # SLA：统一收敛到 sla 字典（旧字段并入，保持向后兼容）
+        from . import sla_spec  # 局部导入避免循环
+        merged: Dict[str, float] = {}
+        for key, limit in dict(self.sla or {}).items():
+            if limit is None:
+                continue
+            norm_key, value = sla_spec.parse_spec(key) if ("." in key or ":" in key
+                                                           or "=" in key) else (key, float(limit))
+            merged[norm_key] = value
+        for legacy in ("ttft_p90", "tpot_p90"):
+            value = getattr(self, legacy)
+            if value is not None:
+                merged.setdefault(legacy, float(value))
+        self.sla = merged
         self.port = int(self.port)
         self.start = max(1, int(self.start))
         self.max_concurrency = max(self.start, int(self.max_concurrency))
@@ -173,14 +191,22 @@ class Config:
                 os.path.dirname(os.path.abspath(__file__)), "GSM8K.jsonl")
 
     # ------------------------------------------------------------------ 校验
+    def sla_rules(self):
+        """→ [SlaRule]，按配置顺序。"""
+        from . import sla_spec
+        return sla_spec.build_rules(self.sla, self.sla_direction)
+
     def validate_for_search(self) -> None:
-        if self.ttft_p90 is None and self.tpot_p90 is None:
+        if not self.sla:
             raise ValueError(
-                "SLA 搜索至少需要一个延迟阈值：--ttft-p90 和/或 --tpot-p90（单位 ms）")
-        for name in ("ttft_p90", "tpot_p90"):
-            value = getattr(self, name)
-            if value is not None and value <= 0:
-                raise ValueError(f"{name} 必须 > 0（{value}）")
+                "SLA 搜索至少需要一条约束，例如 --ttft-p90 2000 --tpot-avg 30，"
+                "或 ClawPerf 风格 --sla ttft.p90:2000 --sla tpot.avg:30"
+                "（可用统计量：avg/min/max/median/p50/p75/p90/p99）")
+        for key, limit in self.sla.items():
+            if limit is None or float(limit) <= 0:
+                raise ValueError(f"SLA 阈值必须 > 0：{key}={limit}")
+        # 触发一次解析，尽早暴露未知指标/统计量
+        self.sla_rules()
 
     def validate_for_run(self) -> None:
         if self.dry_run:
@@ -235,11 +261,7 @@ class Config:
         return "-".join(str(p) for p in parts)
 
     def describe(self) -> str:
-        sla = []
-        if self.ttft_p90 is not None:
-            sla.append(f"TTFT P90<={self.ttft_p90:.0f}ms")
-        if self.tpot_p90 is not None:
-            sla.append(f"TPOT P90<={self.tpot_p90:.0f}ms")
+        sla = [rule.label() for rule in self.sla_rules()]
         return (f"目标 {self.base_url()} model={self.model} | "
                 f"输入{self.input_len}/输出{self.output_len}/条数{self.data_num} | "
                 f"并发{self.start}→{self.max_concurrency} | SLA {' '.join(sla)}")

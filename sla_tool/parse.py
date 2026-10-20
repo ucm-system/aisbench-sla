@@ -26,11 +26,17 @@ METRIC_DEFAULTS: Dict[str, float] = {
     "ttft_p50_ms": -1, "ttft_p75_ms": -1, "ttft_p99_ms": -1,
     "tpot_min_ms": -1, "tpot_max_ms": -1, "tpot_median_ms": -1,
     "tpot_p50_ms": -1, "tpot_p75_ms": -1, "tpot_p99_ms": -1,
-    "e2el_p99_ms": -1,
+    "e2el_min_ms": -1, "e2el_max_ms": -1, "e2el_median_ms": -1,
+    "e2el_p50_ms": -1, "e2el_p75_ms": -1, "e2el_p99_ms": -1,
+    # 输出吞吐同样按统计量导出（表里 OutputTokenThroughput 行含全套统计量）
+    "output_token_throughput": -1,
+    "output_token_throughput_avg": -1, "output_token_throughput_min": -1,
+    "output_token_throughput_max": -1, "output_token_throughput_median": -1,
+    "output_token_throughput_p50": -1, "output_token_throughput_p75": -1,
+    "output_token_throughput_p90": -1, "output_token_throughput_p99": -1,
     "benchmark_duration_s": -1,
     "measured_concurrency": -1,
     "max_concurrency": -1,
-    "output_token_throughput": -1,
     "single_output_throughput": -1,
     "input_token_throughput": -1,
     "total_token_throughput": -1,
@@ -45,6 +51,9 @@ METRIC_DEFAULTS: Dict[str, float] = {
 
 _HEADER_ALIASES = {"average": "avg", "median": "p50", "p75": "p75",
                    "p90": "p90", "p99": "p99", "min": "min", "max": "max"}
+# 表格格式里逐行抽取的指标（键前缀, 单位是否为毫秒）
+_TABLE_ROWS = {"TTFT": ("ttft", True), "TPOT": ("tpot", True), "E2EL": ("e2el", True),
+               "OutputTokenThroughput": ("output_token_throughput", False)}
 _FLOAT_RE = re.compile(r"(\d+\.\d+)")
 _NUMBER_RE = re.compile(r"(\d+\.?\d*)")
 
@@ -73,16 +82,26 @@ def parse_aisbench_log(log_path: str, npu_num: int = 1) -> Tuple[Dict[str, float
             header_cells = [c.strip() for c in line.split("│") if c.strip()]
             continue
         if header_cells:
-            for row_name, prefix in (("TTFT", "ttft"), ("TPOT", "tpot"), ("E2EL", "e2el")):
-                if line.lstrip().startswith("│ " + row_name):
-                    cells = [c.strip() for c in line.split("│") if c.strip()]
-                    if cells and cells[0] == row_name:
-                        for cname, cval in zip(header_cells[2:], cells[2:]):
-                            stat = _HEADER_ALIASES.get(cname.lower())
-                            number = _NUMBER_RE.match(cval)
-                            if stat and number:
-                                result[f"{prefix}_{stat}_ms"] = float(number.group(1))
-                    break
+            first_cell = line.lstrip().lstrip("│ ").strip()
+            for row_name, (prefix, is_ms) in _TABLE_ROWS.items():
+                if not first_cell.startswith(row_name):
+                    continue
+                cells = [c.strip() for c in line.split("│") if c.strip()]
+                if not cells or cells[0] != row_name:
+                    continue
+                suffix = "_ms" if is_ms else ""
+                for cname, cval in zip(header_cells[2:], cells[2:]):
+                    stat = _HEADER_ALIASES.get(cname.lower())
+                    number = _NUMBER_RE.match(cval)
+                    if not stat or not number:
+                        continue
+                    value = float(number.group(1))
+                    result[f"{prefix}_{stat}{suffix}"] = value
+                    if stat == "p50":  # Median 列同时作为 median 暴露
+                        result[f"{prefix}_median{suffix}"] = value
+                    if prefix == "output_token_throughput" and stat == "avg":
+                        result["output_token_throughput"] = value
+                break
 
         if "TTFT" in line and "Time To First Token" not in line:
             values = [float(v) for v in _FLOAT_RE.findall(line)]
@@ -119,6 +138,7 @@ def parse_aisbench_log(log_path: str, npu_num: int = 1) -> Tuple[Dict[str, float
             numbers = _FLOAT_RE.findall(line)
             if numbers:
                 result["output_token_throughput"] = float(numbers[0])
+                result["output_token_throughput_avg"] = float(numbers[0])
                 result["single_output_throughput"] = float(numbers[0]) / max(1, npu_num)
         if "Input Token Throughput" in line:
             numbers = _FLOAT_RE.findall(line)

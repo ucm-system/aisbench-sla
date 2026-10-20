@@ -2,17 +2,20 @@
 """aisbench-sla —— 前缀缓存 SLA 自动调优 CLI。
 
 示例：
-  # 自动搜索满足延迟 SLA 的最大并发（前缀缓存场景）
+  # 自动搜索满足 SLA 的最大并发（前缀缓存场景；SLA 支持 ais_bench 汇总表的全部统计量）
   python3 sla_search.py search \
-      --host 192.168.1.10 --port 8000 --model ds --model-path /home/weights/ds \
+      --target 192.168.1.10:8000 --model ds --model-path /home/weights/ds \
       --work-path /home/benchmark --dataset-path /home/dataset \
       --input-len 2048 --output-len 32 --data-num 160 \
       --prefix-num 1 --repeat-rate 90% --seed 1 --dp 1 \
-      --ttft-p90 2000 --tpot-p90 30 \
+      --sla ttft.avg:1200 --sla tpot.avg:30 --sla ttft.p99:3000 \
       --start 8 --max 256 --output-dir ./sla_out
 
+  # 等价的离散写法（统计量：avg/min/max/median/p50/p75/p90/p99）
+  python3 sla_search.py search ... --ttft-avg 1200 --tpot-p90 30 --e2el-max 20000
+
   # 单并发点压测（等价于参考工具的 aisbench_test.py）
-  python3 sla_search.py point --host ... --concurrency 64 ...
+  python3 sla_search.py point --target ... --concurrency 64 ...
 
   # 只生成数据集
   python3 sla_search.py dataset --model-path /home/weights/ds --input-len 2048 ...
@@ -30,11 +33,18 @@ from typing import Any, Dict, Optional
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from sla_tool import __version__, dataset, report  # noqa: E402
+from sla_tool import __version__, dataset, report, sla_spec  # noqa: E402
 from sla_tool.config import Config  # noqa: E402
 from sla_tool.search import SlaSearch  # noqa: E402
 
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
+
+# 离散 SLA 开关：延迟三指标 × ais_bench 汇总表的全部统计量
+# （表列：Average / Min / Max / Median / P75 / P90 / P99）
+SLA_FLAGS = [(f"--{metric}-{agg}", f"{metric}_{agg}")
+             for metric in ("ttft", "tpot", "e2el")
+             for agg in sla_spec.AGG_ORDER]
+THROUGHPUT_FLAG = ("--output-throughput-min", "output_token_throughput_avg")
 
 
 # --------------------------------------------------------------------- 参数
@@ -107,8 +117,16 @@ def add_env_opts(parser: argparse.ArgumentParser) -> None:
 
 def add_sla_opts(parser: argparse.ArgumentParser) -> None:
     group = parser.add_argument_group("SLA 与搜索")
-    group.add_argument("--ttft-p90", type=float, help="TTFT P90 上限（ms）")
-    group.add_argument("--tpot-p90", type=float, help="TPOT P90 上限（ms）")
+    group.add_argument("--sla", action="append", metavar="<指标>.<统计量>:<阈值>",
+                       help="SLA 约束，可重复、多条同时生效（AND）。示例："
+                            "--sla ttft.p90:2000  --sla tpot.avg:30  --sla e2e.max:20000  "
+                            "--sla output_throughput.avg:>=500（吞吐为下限语义）")
+    agg_help = " / ".join(sla_spec.AGG_ORDER)
+    for flag, _dest in SLA_FLAGS:
+        group.add_argument(flag, type=float, default=None,
+                           help=f"等价 --sla（统计量可用：{agg_help}）")
+    group.add_argument(THROUGHPUT_FLAG[0], type=float, default=None, dest=THROUGHPUT_FLAG[1],
+                       help="输出吞吐下限（tok/s），等价 --sla output_throughput.avg:>=N")
     group.add_argument("--start", type=int, help="起始并发（默认 1）")
     group.add_argument("--max", "--max-concurrency", dest="max_concurrency",
                        type=int, help="并发上限")
@@ -159,8 +177,9 @@ def build_parser() -> argparse.ArgumentParser:
 def namespace_to_config(args: argparse.Namespace) -> Config:
     values: Dict[str, Any] = {}
     known = {f.name for f in fields(Config)}
+    sla_values: Dict[str, float] = {}
     for key, value in vars(args).items():
-        if key in ("command", "config", "verbose", "concurrency"):
+        if key in ("command", "config", "verbose", "concurrency", "sla"):
             continue
         if value is None:
             continue
@@ -171,8 +190,17 @@ def namespace_to_config(args: argparse.Namespace) -> Config:
             target, value = "seed_per_point", False
         if key == "pods":
             value = [item.strip() for item in str(value).split(",") if item.strip()]
+        if key in sla_values or key in {dest for _flag, dest in SLA_FLAGS} \
+                or key == THROUGHPUT_FLAG[1]:
+            sla_values[key] = float(value)
+            continue
         if target in known:
             values[target] = value
+    for item in (getattr(args, "sla", None) or []):
+        key, limit = sla_spec.parse_spec(item)
+        sla_values[key] = limit
+    if sla_values:
+        values["sla"] = sla_values
     cfg = Config()
     if args.config:
         cfg = Config.from_json(args.config)
@@ -193,14 +221,14 @@ def setup_logging(verbose: bool) -> None:
 
 # --------------------------------------------------------------------- 子命令
 def cmd_search(cfg: Config) -> int:
-    search = SlaSearch(cfg, on_point=lambda point: print(report.point_line(point)))
+    search = SlaSearch(cfg, on_point=lambda point: print(report.point_line(point, cfg)))
     if cfg.dry_run:
         report.print_dry_run(cfg)
     result = search.run()
     if result.status == "dry_run":
         return result.exit_code
     if result.points:
-        report.print_table(result.points)
+        report.print_table(result.points, cfg)
     report.print_summary(result, cfg)
     if result.status == "error":
         # 参数/环境类错误必须让 stderr 也能看到（脚本里只抓 stderr 时不能是空的）
@@ -223,8 +251,8 @@ def cmd_point(cfg: Config, args: argparse.Namespace) -> int:
     search = SlaSearch(cfg)
     search._prepare()  # noqa: SLF001 - 单点模式复用准备流程
     point = search._probe(int(args.concurrency))  # noqa: SLF001
-    print(report.point_line(point))
-    report.print_table([point])
+    print(report.point_line(point, cfg))
+    report.print_table([point], cfg)
     if point.hit_rate:
         for pod, engines in (point.hit_rate.get("per_pod") or {}).items():
             for engine, row in engines.items():

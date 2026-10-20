@@ -25,7 +25,7 @@ python3 sla_search.py search \
     --dataset-path /home/dataset \
     --input-len 2048 --output-len 32 --data-num 160 \
     --dataset-type prefix_cache --prefix-num 1 --repeat-rate 90% --seed 1 --dp 1 \
-    --ttft-p90 2000 --tpot-p90 30 \
+    --sla ttft.avg:1200 --sla tpot.avg:30 \
     --start 8 --max 256 --output-dir ./sla_out
 
 # 2) 单并发点压测（等价于参考工具的 aisbench_test.py）
@@ -58,7 +58,7 @@ python3 sla_search.py search \
     --work-path /home/benchmark --dataset-path /home/dataset \
     --input-len 65536 --output-len 1024 --data-num 160 \
     --dataset-type prefix_cache --prefix-num 1 --repeat-rate 90% --seed 1 --dp 1 \
-    --ttft-p90 30000 --tpot-p90 40 \
+    --sla ttft.avg:30000 --sla tpot.avg:40 \
     --start 1 --max 64 --max-probes 12 --point-timeout 1800 \
     --output-dir ./sla_out_64k
 ```
@@ -138,6 +138,35 @@ mock 延迟恒定故各点全达标；真实 NPU 上会出现拐点，读数方�
 > `hits` 可能来自两套 token 估算（mock 的 chars/4 估算 vs trie 的 token 计数）。工具会照实
 > 显示并在 `hit_rate_note` 列标注「服务端计数器口径可能异常」。
 
+## SLA 判定口径：支持 ais_bench 汇总表的**全部统计量**
+
+实测 ais_bench（v3.1.20260330）的 Performance Parameters 表逐指标给出：
+
+```
+│ Performance Parameters │ Stage │ Average │ Min │ Max │ Median │ P75 │ P90 │ P99 │ N │
+│ TTFT / TPOT / E2EL / OutputTokenThroughput │ …
+```
+
+因此 SLA 阈值支持 **`ttft` / `tpot` / `e2el` × `avg / min / max / median / p50 / p75 / p90 / p99`**，
+外加输出吞吐下限。两种等价写法（可混用，多条同时生效、AND 关系）：
+
+```bash
+# ① ClawPerf 风格 --slo 语法：<指标>.<统计量>:<阈值>（分隔符 . _ - 均可，: 或 = 均可）
+--sla ttft.avg:1200  --sla ttft.p99:3000  --sla tpot.avg:30  --sla e2e.max:20000
+--sla output_throughput.avg:>=500        # 吞吐为下限语义
+
+# ② 离散开关（等价，便于脚本拼装）
+--ttft-avg 1200 --ttft-p99 3000 --tpot-avg 30 --e2el-max 20000 --output-throughput-min 500
+```
+
+> 口径怎么选：容量规划常用 **avg**（贴近平均体验）；对尾延迟敏感的服务用 **p90/p99**；
+> 长上下文场景建议 **avg + max/p99 组合**（例如 `--sla ttft.avg:30000 --sla ttft.max:60000`）。
+> 参考 ClawPerf 的 SLO 模式（`--slo ttft.p99:1500 --slo tpot.avg:30 --slo e2e.max:30000`），
+> 本工具用同一套 `<指标>.<统计量>:<阈值>` 语法，并同样支持多条约束 AND 生效。
+>
+> 任一约束「无数据」时该点判为不满足（不静默放行）；`sla_summary.json` 里会记录
+> 完整口径（`sla` 与 `sla_labels`）。
+
 ## 它做了什么
 
 每个探测点都是一次真实的「前缀预热 + 全量压测」两阶段运行（与参考工具一致）：
@@ -202,7 +231,8 @@ stdout 会实时打印每个点的判定行，结束后打印明细表和结论�
 | `--prefix-num/--repeat-rate/--seed/--dp` | 前缀数据集参数（`--repeat-rate` 支持 `90%` 或 `0.9`） |
 | `--length-mean/std/min/max` | 变长输入（高斯或均匀分布），如 8k~128k 不定长 |
 | `--dataset-type` | `prefix_cache`（默认）或 `normal` |
-| `--ttft-p90/--tpot-p90` | SLA 阈值（ms），至少给一个 |
+| `--sla <指标>.<统计量>:<阈值>` | SLA 约束，可重复、多条 AND；指标 `ttft/tpot/e2e/output_throughput`，统计量 `avg/min/max/median/p50/p75/p90/p99`；吞吐为下限语义（`>=`） |
+| `--ttft-avg`…`--e2el-p99`、`--output-throughput-min` | 等价的离散开关（由 `--sla` 自动展开）；至少给一条约束 |
 | `--start/--max/--tolerance/--max-probes/--max-bisect` | 搜索控制 |
 | `--prefix-warmup` | `per-point`（默认）/ `once` / `none`；`once` 更快，`none` 不预热（命中率会显著偏低） |
 | `--no-seed-per-point` | 关闭默认的「每点换 seed」，各点复用同一数据集（省去逐点生成，适合长上下文；命中率会逐点饱和、各点不可比） |
@@ -267,7 +297,7 @@ docker run --rm \
     --work-path /benchmark --dataset-path /rtest/ds --output-dir /rtest/out \
     --input-len 2048 --output-len 32 --data-num 160 \
     --dataset-type prefix_cache --prefix-num 1 --repeat-rate 90% --dp 1 \
-    --ttft-p90 2000 --tpot-p90 30 --start 8 --max 256
+    --sla ttft.p90:2000 --sla tpot.avg:30 --start 8 --max 256
 ```
 
 实测环境：镜像 `v3.1-20260330-master_x86_64_py_310`（Python 3.10.18 / ais_bench 3.1.20260330 /
@@ -291,11 +321,11 @@ CLI 为 `/usr/local/bin/ais_bench`），数据集最终落在 `/benchmark/ais_be
    检查 `--pods`（PD 分离要填各 P 节点）与系统代理：内网地址经代理会 502/超时，工具已强制绕过代理，
    但**服务端**指标端点本身要可达，可先 `curl -s http://<ip>:<port>/metrics | grep prefix_cache` 自检。
 4. **超时**：`--point-timeout 1800` 给单点加上限；高并发大输入的单点跑很久是正常的。
-5. **只想要性能数据，不要 SLA 搜索**：用 `point` 子命令，或把 `--ttft-p90/--tpot-p90` 都省掉并只跑一个点。
+5. **只想要性能数据，不要 SLA 搜索**：用 `point` 子命令，或不给任何 SLA 约束（`--sla`/`--ttft-*`）并只跑一个点。
 
 ## 已知限制
 
-- SLA 判定只看延迟阈值（按需求）；吞吐/成功率不作为门限，只在报告中展示。
+- SLA 判定支持延迟（ttft/tpot/e2el）的全部统计量与输出吞吐下限；成功率不作为门限（ais_bench 汇总表未提供该列）。
 - 每次探测都是独立进程的真实压测，**总耗时 = 探测点数 × 单点时长**；用 `--prefix-warmup once`
   与合理的 `--max-probes` 控制时长。
 - 默认每个探测点用独立 seed 生成数据集（命中率各点可比）；用 `--no-seed-per-point` 可改为

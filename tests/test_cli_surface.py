@@ -44,9 +44,12 @@ def main() -> int:
         if sub == "search":
             for needle in ("--target", "--ttft-p90", "--tpot-p90", "--max-probes",
                            "--seed-per-point", "--no-seed-per-point", "--reset-cache",
-                           "--data-num", "--work-path", "--dry-run"):
+                           "--data-num", "--work-path", "--dry-run", "--sla",
+                           "--ttft-avg", "--ttft-max", "--ttft-median", "--ttft-p99",
+                           "--tpot-avg", "--e2el-p99", "--output-throughput-min"):
                 check(needle in proc.stdout, f"search --help 含 {needle}")
             check("2~4 倍" in proc.stdout, "search --help 说明 data-num 与 max 的倍数关系")
+            check("统计量" in proc.stdout, "search --help 说明可用统计量")
         if sub == "point":
             check("--concurrency" in proc.stdout, "point --help 含 --concurrency")
 

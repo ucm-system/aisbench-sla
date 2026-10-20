@@ -8,7 +8,7 @@ import time
 from typing import Dict, Iterable, List
 
 from . import __version__
-from .search import PointResult, SearchResult, dry_run_points
+from .search import ALL_METRIC_KEYS, PointResult, SearchResult, dry_run_points
 
 
 def _pct(value) -> str:
@@ -23,14 +23,30 @@ def _num(value, digits: int = 0) -> str:
     return f"{float(value):.{digits}f}"
 
 
-def point_line(point: PointResult) -> str:
+def sla_columns(cfg) -> List[tuple]:
+    """配置里参与判定的 (指标键, 表头, 是否整数) 列表 —— 表格按此动态出列。"""
+    from .sla_spec import METRIC_LABELS
+    columns = []
+    for rule in cfg.sla_rules():
+        unit_ms = rule.metric != "output_token_throughput"
+        header = f"{METRIC_LABELS.get(rule.metric, rule.metric)} {rule.agg.upper()}"
+        columns.append((rule.metrics_key, header, unit_ms))
+    return columns
+
+
+def point_line(point: PointResult, cfg=None) -> str:
     hit = point.hit_rate or {}
-    return ("  {mark} c={c:<4} TTFT P90 {ttft:>8}  TPOT P90 {tpot:>7}  "
-            "out {tput:>8} tok/s  HBM {hbm}  ext {ext}  {reason}").format(
+    gated = []
+    if cfg is not None:
+        for key, header, unit_ms in sla_columns(cfg):
+            gated.append(f"{header} {_num(point.metrics.get(key), 0 if unit_ms else 1)}")
+    else:
+        gated = [f"TTFT P90 {_num(point.metrics.get('ttft_p90_ms'))}",
+                 f"TPOT P90 {_num(point.metrics.get('tpot_p90_ms'), 1)}"]
+    return ("  {mark} c={c:<4} {gated}  out {tput:>8} tok/s  HBM {hbm}  ext {ext}  {reason}").format(
         mark="PASS" if point.ok else "FAIL",
         c=point.concurrency,
-        ttft=_num(point.metrics.get("ttft_p90_ms")),
-        tpot=_num(point.metrics.get("tpot_p90_ms"), 1),
+        gated="  ".join(gated),
         tput=_num(point.metrics.get("output_token_throughput"), 1),
         hbm=_pct(hit.get("hbm_hit_rate")),
         ext=_pct(hit.get("ext_hit_rate")),
@@ -38,22 +54,19 @@ def point_line(point: PointResult) -> str:
     )
 
 
-HEADERS = ["并发", "判定", "TTFT avg", "TTFT P90", "TPOT avg", "TPOT P90",
-           "输出吞吐", "QPS", "请求数", "实测并发", "HBM命中率", "ext命中率",
-           "预热命中率", "峰值在途", "耗时(s)"]
-
-
-def print_table(points: Iterable[PointResult]) -> None:
+def print_table(points: Iterable[PointResult], cfg=None) -> None:
+    gated = sla_columns(cfg) if cfg is not None else [
+        ("ttft_p90_ms", "TTFT P90", True), ("tpot_p90_ms", "TPOT P90", True)]
+    headers = ["并发", "判定"] + [header for _, header, _ in gated] + [
+        "输出吞吐", "QPS", "请求数", "实测并发", "HBM命中率", "ext命中率",
+        "预热命中率", "峰值在途", "耗时(s)"]
     rows = []
     for point in points:
         hit = point.hit_rate or {}
-        rows.append([
-            str(point.concurrency),
-            "PASS" if point.ok else "FAIL",
-            _num(point.metrics.get("ttft_avg_ms")),
-            _num(point.metrics.get("ttft_p90_ms")),
-            _num(point.metrics.get("tpot_avg_ms"), 1),
-            _num(point.metrics.get("tpot_p90_ms"), 1),
+        row = [str(point.concurrency), "PASS" if point.ok else "FAIL"]
+        for key, _, unit_ms in gated:
+            row.append(_num(point.metrics.get(key), 0 if unit_ms else 1))
+        row += [
             _num(point.metrics.get("output_token_throughput"), 1),
             _num(point.metrics.get("request_throughput_qps"), 2),
             _num(point.metrics.get("total_requests")),
@@ -63,15 +76,17 @@ def print_table(points: Iterable[PointResult]) -> None:
             _pct(point.warmup_hit_rate),
             _num(point.gauges.get("max_running")),
             _num(point.elapsed_s, 1),
-        ])
-    print("\n" + "=" * 118)
+        ]
+        rows.append(row)
+    width = max(118, 11 * len(headers))
+    print("\n" + "=" * width)
     print("探测结果明细")
-    print("=" * 118)
-    print("".join(f"{h:<11}" for h in HEADERS))
-    print("-" * 118)
+    print("=" * width)
+    print("".join(f"{h:<11}" for h in headers))
+    print("-" * width)
     for row in rows:
         print("".join(f"{cell:<11}" for cell in row))
-    print("=" * 118)
+    print("=" * width)
 
 
 def throughput_summary(points: Iterable[PointResult]) -> Dict[str, object]:
@@ -104,10 +119,13 @@ def throughput_summary(points: Iterable[PointResult]) -> Dict[str, object]:
 
 def print_summary(result: SearchResult, cfg) -> None:
     print()
-    print("=" * 118)
+    width = 118
+    print("=" * width)
     if result.error:
         print(f"错误：{result.error}")
     print(f"结论：{result.note}")
+    if cfg is not None and cfg.sla:
+        print("  判定口径：" + "；".join(rule.label() for rule in cfg.sla_rules()))
     if result.max_ok is not None:
         print(f"  SLA 内最大并发：{result.max_ok}")
     throughput = throughput_summary(result.points)
@@ -116,8 +134,7 @@ def print_summary(result: SearchResult, cfg) -> None:
     if peak:
         flag = "达标" if peak.get("ok") else "不达标"
         print(f"  最高输出吞吐：{peak['value']:.1f} tok/s @ 并发={peak['concurrency']}"
-              f"（{flag}：TTFT P90 {_num(peak.get('ttft_p90_ms'))}ms，"
-              f"TPOT P90 {_num(peak.get('tpot_p90_ms'), 1)}ms）")
+              f"（{flag}）")
     if best_ok and (not peak or best_ok["concurrency"] != peak["concurrency"]):
         print(f"  SLA 内最高吞吐：{best_ok['value']:.1f} tok/s @ 并发={best_ok['concurrency']}")
     print(f"  状态：{result.status}（退出码 {result.exit_code}）")
@@ -133,8 +150,11 @@ def print_dry_run(cfg) -> None:
     print("dry-run：将按以下阶梯探测（二分区间由实测结果决定）")
     print(f"  并发点：{' -> '.join(str(p) for p in points)}"
           + (" -> …" if points and points[-1] * 2 <= cfg.max_concurrency else ""))
+    print("  SLA 口径：" + "；".join(rule.label() for rule in cfg.sla_rules()))
+    for rule in cfg.sla_rules():
+        print(f"    {rule.key} -> {rule.metrics_key}")
     print(f"  预检：{'开（并发=1）' if cfg.start > 1 else '关（start=1 时首个探针即预检）'}")
-    print(f"  前缀预热：{cfg.prefix_warmup}")
+    print(f"  前缀预热：{cfg.prefix_warmup}（每点独立数据集：{'是' if cfg.seed_per_point else '否'}）")
     print(f"  单点：数据集={cfg.dataset or '(需生成)'} work_path={cfg.work_path}")
     print(f"  输出目录：{cfg.output_dir}")
 
@@ -142,9 +162,8 @@ def print_dry_run(cfg) -> None:
 # --------------------------------------------------------------------- 落盘
 CSV_FIELDS = [
     "kind", "concurrency", "seed", "output_len", "verdict", "reason",
-    "ttft_avg_ms", "ttft_p90_ms", "tpot_avg_ms", "tpot_p90_ms", "e2el_p90_ms",
-    "output_token_throughput", "request_throughput_qps", "total_requests",
-    "measured_concurrency", "hbm_hit_rate", "ext_hit_rate", "hit_rate_note",
+    *ALL_METRIC_KEYS,
+    "hbm_hit_rate", "ext_hit_rate", "hit_rate_note",
     "warmup_hit_rate", "max_running", "elapsed_s", "log_path",
 ]
 
@@ -182,7 +201,8 @@ def write_summary(out_dir: str, cfg, result: SearchResult) -> str:
         "note": result.note,
         "error": result.error,
         "max_ok_concurrency": result.max_ok,
-        "sla": {"ttft_p90_ms": cfg.ttft_p90, "tpot_p90_ms": cfg.tpot_p90},
+        "sla": dict(cfg.sla),
+        "sla_labels": [rule.label() for rule in cfg.sla_rules()],
         "search": {"start": cfg.start, "max": cfg.max_concurrency,
                    "tolerance": cfg.tolerance, "max_probes": cfg.max_probes,
                    "max_bisect": cfg.max_bisect,

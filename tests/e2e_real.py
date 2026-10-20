@@ -100,7 +100,8 @@ def build_command(args) -> list[str]:
         "--data-num", str(args.data_num),
         "--dataset-type", "prefix_cache", "--prefix-num", "1",
         "--repeat-rate", "90%", "--seed", "1", "--dp", "1",
-        "--ttft-p90", str(args.ttft_p90), "--tpot-p90", str(args.tpot_p90),
+        "--ttft-" + args.ttft_stat, str(args.ttft_limit),
+        "--tpot-" + args.tpot_stat, str(args.tpot_limit),
         "--start", str(args.start), "--max", str(args.max),
         "--max-probes", str(args.max_probes), "--max-bisect", str(args.max_bisect),
         "--tolerance", str(args.tolerance),
@@ -166,19 +167,31 @@ def evaluate(args, summary: dict, exit_code: int) -> None:
           f"{args.start} <= {max_ok} <= {args.max}")
 
     # 二分收敛：边界缺口必须落在容差内（tolerance 与 lo//8 的较大者）
+    ttft_key = f"ttft_{args.ttft_stat}_ms"
+    tpot_key = f"tpot_{args.tpot_stat}_ms"
     if passing and failing:
         first_fail = min(p["concurrency"] for p in failing if p["concurrency"] > max_ok)
         gap = first_fail - max_ok
         allowed = max(args.tolerance, max_ok // 8) + 1
         check(gap <= allowed, "二分收敛在容差内",
               f"边界缺口 {gap} <= 允许 {allowed}（最大通过 {max_ok}，最小失败 {first_fail}）")
-        best_pass = max(p["ttft_p90_ms"] for p in passing)
-        worst_fail = max(p["ttft_p90_ms"] for p in failing)
-        check(best_pass <= args.ttft_p90 < worst_fail, "拐点两侧 TTFT 分居阈值两边",
-              f"通过侧最大 {best_pass:.0f}ms <= 阈值 {args.ttft_p90:.0f}ms < 失败侧 {worst_fail:.0f}ms")
+        best_pass = max(p[ttft_key] for p in passing)
+        worst_fail = max(p[ttft_key] for p in failing)
+        check(best_pass <= args.ttft_limit < worst_fail,
+              f"拐点两侧 TTFT {args.ttft_stat} 分居阈值两边",
+              f"通过侧最大 {best_pass:.0f}ms <= 阈值 {args.ttft_limit:.0f}ms < 失败侧 {worst_fail:.0f}ms")
         if args.expect_max_ok:
             check(max_ok == args.expect_max_ok, f"最大并发 = {args.expect_max_ok}（指定值）",
                   f"实际 {max_ok}")
+    # 独立复核：逐点核对「判定」与配置规则是否一致（不依赖工具自己的结论）
+    def satisfies(point: dict) -> bool:
+        return (point.get(ttft_key, -1) >= 0 and point[ttft_key] <= args.ttft_limit
+                and point.get(tpot_key, -1) >= 0 and point[tpot_key] <= args.tpot_limit)
+
+    mismatch = [p["concurrency"] for p in probes
+                if (p["verdict"] == "PASS") != satisfies(p)]
+    check(not mismatch, f"判定与配置规则一致（{args.ttft_stat}/{args.tpot_stat}）",
+          f"不一致的点：{mismatch}" if mismatch else f"{len(probes)} 点全部一致")
     check(all((p.get("hbm_hit_rate") or 0) > 0 for p in probes),
           "每个探测点都算出了命中率（快照差分链路通）",
           f"min={min((p.get('hbm_hit_rate') or 0) for p in probes):.2%}" if probes else "无点")
@@ -230,8 +243,11 @@ def main() -> int:
     parser.add_argument("--data-num", type=int, default=16,
                         help="数据集条数。测试默认只发一轮（= --max），够触发拐点且跑得快；"
                              "真实测速请按 README 建议取 --max 的 2~4 倍")
-    parser.add_argument("--ttft-p90", type=float, default=1200)
-    parser.add_argument("--tpot-p90", type=float, default=40)
+    parser.add_argument("--ttft-stat", default="p90",
+                        help="TTFT 用哪个统计量做阈值（avg/min/max/median/p50/p75/p90/p99）")
+    parser.add_argument("--tpot-stat", default="p90", help="TPOT 用哪个统计量做阈值")
+    parser.add_argument("--ttft-limit", type=float, default=1200, help="TTFT 阈值（ms）")
+    parser.add_argument("--tpot-limit", type=float, default=40, help="TPOT 阈值（ms）")
     parser.add_argument("--start", type=int, default=1)
     parser.add_argument("--max", type=int, default=16)
     parser.add_argument("--max-probes", type=int, default=12)
@@ -257,10 +273,11 @@ def main() -> int:
         args.assert_no_saturation = not args.reuse_dataset
     if args.no_docker:
         # 桩内置确定性 SLA 模型：ttft_p90 = 100 + 20c、tpot_p90 = 10 + 0.5c
-        # 阈值 340 -> c<=12 通过、c=16 起失败，二分收敛到 12
-        if args.ttft_p90 == 1200:
-            args.ttft_p90 = 340
-        if not args.expect_max_ok:
+        # 仅在「默认 p90 阈值」时套用可精确预期的 340 → 收敛到 12；
+        # 其它统计量/阈值只断言结构性性质（单调性、二分收敛、一致性）
+        if args.ttft_limit == 1200 and args.ttft_stat == "p90":
+            args.ttft_limit = 340
+        if not args.expect_max_ok and args.ttft_stat == "p90" and args.ttft_limit == 340:
             args.expect_max_ok = 12
     args.port = args.port or free_port()
     args.model = ""
