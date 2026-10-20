@@ -361,6 +361,41 @@ def scenario_request_rate(env: Env) -> None:
           "CSV 每行记录 request_rate", f"{len(rows)} 行")
 
 
+def scenario_output_framing(env: Env) -> None:
+    """终端呈现：轮次框 + 阶段分节线；颜色只在终端，日志文件保持纯文本。"""
+    out = env.out_dir("framing")
+    proc = env.run(["search", *base_workload([
+        "--sla", "ttft.p90:1200", "--start", "4", "--max", "8", "--max-probes", "3"]),
+        "--color", "always"], out)
+    stdout = proc.stdout
+    check(proc.returncode == 0, "呈现场景退出码 0", f"rc={proc.returncode}")
+    check("第 1/3 次探测" in stdout and "第 2/3 次探测" in stdout,
+          "每轮探测有编号分隔框", "第 1/3、第 2/3 次探测")
+    check("预热阶段 warmup" in stdout and "测试阶段 full" in stdout,
+          "预热/测试阶段各有分节线")
+    check("计入 SLA 判定" in stdout and "不计入 SLA" in stdout,
+          "分节线标注该阶段是否计入判定")
+    check("\x1b[" in stdout, "--color always 时终端输出带颜色")
+
+    plain = env.run(["search", *base_workload([
+        "--sla", "ttft.p90:1200", "--start", "4", "--max", "4", "--max-probes", "1"]),
+        "--color", "never"], env.out_dir("framing_never"))
+    check("\x1b[" not in plain.stdout, "--color never 时不带颜色")
+    check("第 1/1 次探测" in plain.stdout, "--color never 仍保留框线层次")
+
+    # 日志文件一律纯文本（ais_bench 自身无条件上色，需要被剥掉）
+    logs = [out / "run.log", out / "aisbench_all.log"]
+    logs += list((out / "points").glob("c*/full.log"))
+    logs += list((out / "points").glob("c*/warmup.log"))
+    polluted = [p.name for p in logs if p.is_file() and "\x1b[" in p.read_text(
+        encoding="utf-8", errors="replace")]
+    check(not polluted, "日志文件不含 ANSI（可安全 grep）",
+          f"含转义的文件：{polluted}" if polluted else f"{len(logs)} 个文件干净")
+    run_log = (out / "run.log").read_text(encoding="utf-8", errors="replace")
+    check("第 1/3 次探测" in run_log and "测试阶段 full" in run_log,
+          "分隔框同样写进 run.log（事后可读同一层次）")
+
+
 SCENARIOS = [
     ("point 模式 + 日志透传", scenario_point_stream),
     ("--no-stream", scenario_no_stream),
@@ -374,6 +409,7 @@ SCENARIOS = [
     ("探针预算", scenario_budget),
     ("桩失败点", scenario_stub_fail),
     ("请求频率透传与限速告警", scenario_request_rate),
+    ("终端呈现与日志纯净度", scenario_output_framing),
 ]
 
 

@@ -18,13 +18,17 @@ from typing import Dict
 _FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 
 
-def _has_handler(path: str) -> bool:
+def _find_handler(path: str):
     target = os.path.abspath(path)
     for handler in logging.getLogger().handlers:
         if isinstance(handler, logging.FileHandler):
             if os.path.abspath(getattr(handler, "baseFilename", "")) == target:
-                return True
-    return False
+                return handler
+    return None
+
+
+def _has_handler(path: str) -> bool:
+    return _find_handler(path) is not None
 
 
 def setup_run_logging(output_dir: str, banner: str = "") -> Dict[str, str]:
@@ -33,20 +37,25 @@ def setup_run_logging(output_dir: str, banner: str = "") -> Dict[str, str]:
     run_log = os.path.join(output_dir, "run.log")
     all_log = os.path.join(output_dir, "aisbench_all.log")
     root = logging.getLogger()
+    from . import console
 
-    if not _has_handler(run_log):
-        handler = logging.FileHandler(run_log, mode="w", encoding="utf-8")
-        handler.setFormatter(logging.Formatter(_FORMAT))
-        root.addHandler(handler)
+    run_handler = _find_handler(run_log)
+    if run_handler is None:
+        run_handler = logging.FileHandler(run_log, mode="w", encoding="utf-8")
+        run_handler.setFormatter(logging.Formatter(_FORMAT))
+        root.addHandler(run_handler)
         root.setLevel(min(root.level or logging.INFO, logging.INFO))
+    console.register_record_handler(run_handler)
 
-    if not _has_handler(all_log):
-        handler = logging.FileHandler(all_log, mode="a", encoding="utf-8")
-        handler.setFormatter(logging.Formatter(_FORMAT))
-        root.addHandler(handler)
+    all_handler = _find_handler(all_log)
+    if all_handler is None:
+        all_handler = logging.FileHandler(all_log, mode="a", encoding="utf-8")
+        all_handler.setFormatter(logging.Formatter(_FORMAT))
+        root.addHandler(all_handler)
         with open(all_log, "a", encoding="utf-8") as handle:
             handle.write("\n" + "=" * 78 + "\n")
             handle.write(f"# {time.strftime('%Y-%m-%d %H:%M:%S')} {banner or 'aisbench-sla'}\n")
             handle.write("=" * 78 + "\n")
+    console.register_record_handler(all_handler)
 
     return {"run_log": run_log, "all_log": all_log}

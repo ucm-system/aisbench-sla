@@ -47,7 +47,7 @@ def main() -> int:
                            "--data-num", "--work-path", "--dry-run", "--sla",
                            "--ttft-avg", "--ttft-max", "--ttft-median", "--ttft-p99",
                            "--tpot-avg", "--e2el-p99", "--output-throughput-min",
-                           "--request-rate", "--no-stream"):
+                           "--request-rate", "--no-stream", "--color", "--no-color"):
                 check(needle in proc.stdout, f"search --help 含 {needle}")
             check("2~4 倍" in proc.stdout, "search --help 说明 data-num 与 max 的倍数关系")
             check("统计量" in proc.stdout, "search --help 说明可用统计量")

@@ -107,6 +107,10 @@ sla_out/
 ais_bench 的输出**实时打印到终端**（同时写入 `points/c<N>/*.log`，并回拷一份到它的 exp 目录）；
 不想刷屏用 `--no-stream`。
 
+终端里每轮探测用 `***` 分隔框标出（`第 n/N 次探测 ┃ 并发 c=… ┃ 数据集 seed=…`），
+预热阶段与测试阶段各有分节线（标注是否计入 SLA 判定），ais_bench 自身的 INFO/WARNING 颜色原样保留。
+颜色只在终端启用（`--color never` 关闭），**日志文件始终是纯文本**，方便 grep。
+
 ## 参数速查
 
 | 参数 | 说明 |
@@ -130,6 +134,7 @@ ais_bench 的输出**实时打印到终端**（同时写入 `points/c<N>/*.log`�
 | `--aisbench-cmd` / `--aisbench-extra-args` | 替换 / 追加 ais_bench 命令 |
 | `--point-timeout` | 单点超时秒数（超时终止进程树） |
 | `--no-stream` | 不把 ais_bench 输出实时打到终端（仍写入日志文件） |
+| `--color` / `--no-color` | 终端颜色 `auto`（默认，仅 TTY）/ `always` / `never`；日志文件始终纯文本 |
 | `--no-num-warmups` | 不附加 `--num-warmups 0`（老版本 ais_bench） |
 | `--dry-run` | 只打印探测计划 |
 | `--config` | JSON 配置文件（CLI 参数优先） |

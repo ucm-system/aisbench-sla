@@ -20,7 +20,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional
 
-from . import aisbench, dataset, logs, metrics
+from . import aisbench, console, dataset, logs, metrics
+from . import __version__
 from .parse import METRIC_DEFAULTS, parse_aisbench_log, looks_like_bad_num_warmups
 
 logger = logging.getLogger(__name__)
@@ -123,6 +124,7 @@ class SlaSearch:
         self.on_event = on_event or (lambda message: logger.info("%s", message))
         self.full_probes = 0
         self._probe_seq = 0
+        self._round = 0
         self._warmup_done = False
         self.prefix_path = ""
         self.dataset_path = ""
@@ -340,8 +342,22 @@ class SlaSearch:
         started = time.time()
         run_dir = os.path.join(cfg.output_dir, "points", f"c{concurrency}")
         os.makedirs(run_dir, exist_ok=True)
+        self._round += 1
+        total = cfg.max_probes
+        # 先备好本点数据集（可能耗时），再打轮次框，避免准备日志夹在框线中间
         point_prefix, point_dataset, point_seed = self._point_dataset(concurrency)
         self._probe_seq += 1
+        console.banner(
+            f"第 {self._round}/{total} 次探测 ┃ 并发 c={concurrency}"
+            + (f" ┃ 数据集 seed={point_seed}"
+               if cfg.seed_per_point else " ┃ 复用数据集"),
+            right=f"aisbench-sla {__version__} ┃ {time.strftime('%H:%M:%S')}")
+        console.emit(f"  SLA 口径：{'；'.join(rule.label() for rule in cfg.sla_rules())}",
+                     (console.DIM,))
+        console.emit(f"  请求频率：{cfg.request_rate:g} RPS"
+                     + ("（不限速）" if cfg.request_rate <= 0 else "")
+                     + f" ┃ 负载：输入 {cfg.input_len} / 输出 {cfg.output_len}"
+                     f" / {cfg.data_num} 条 ┃ 目标 {cfg.base_url()}", (console.DIM,))
         point = PointResult(concurrency=concurrency, kind=kind, run_dir=run_dir,
                             output_len=cfg.output_len, seed=point_seed,
                             request_rate=cfg.request_rate)
@@ -357,18 +373,22 @@ class SlaSearch:
             do_warmup = False
         if do_warmup:
             warm_c = cfg.dp if cfg.dp > 1 else cfg.prefix_num
-            self.on_event(f"[c={concurrency}] 前缀预热阶段（并发={warm_c}, output_len=1）")
+            console.rule(f"预热阶段 warmup ┃ 并发={warm_c} ┃ output_len=1 ┃ 只写缓存，不计入 SLA",
+                         codes=console.phase_label("warmup"))
             warm_result, _, warm_hit, _ = self._run_phase(
                 run_dir, "warmup", warm_c, 1, 0.0, point_prefix)
             point.warmup_hit_rate = warm_hit.hbm_hit_rate
             self._warmup_done = True
+            console.rule(f"预热结束 ┃ HBM 命中率 {self._pct(point.warmup_hit_rate)}",
+                         codes=console.phase_label("warmup"))
             if not warm_result.ok:
                 logger.warning("前缀预热阶段失败（returncode=%s）：%s",
                                warm_result.returncode, aisbench.tail(warm_result.log_path, 10))
 
         # ---- 全量阶段 ----
-        self.on_event(f"[c={concurrency}] 全量阶段（output_len={cfg.output_len}, "
-                      f"request_rate={cfg.request_rate}）")
+        console.rule(f"测试阶段 full ┃ 并发={concurrency} ┃ output_len={cfg.output_len}"
+                     f" ┃ request_rate={cfg.request_rate:g}"
+                     f" ┃ 计入 SLA 判定", codes=console.phase_label("full"))
         command_result, parsed, hit, gauges = self._run_phase(
             run_dir, "full", concurrency, cfg.output_len, cfg.request_rate,
             point_dataset)
@@ -413,7 +433,7 @@ class SlaSearch:
             result.status = "preflight_failed"
             result.max_ok = 0
             result.note = (f"预检失败：并发=1 仍不满足 SLA（{point.reason}）。"
-                           "阈值与服务实际能力矛盾，请放宽 --ttft-p90/--tpot-p90 后重试")
+                           "阈值与服务实际能力矛盾，请放宽 SLA 约束（--sla / --ttft-* 等）后重试")
             self.on_event(result.note)
         else:
             # 预检本身就是"已知可行"的并发点：记入 max_ok，避免预算不足时

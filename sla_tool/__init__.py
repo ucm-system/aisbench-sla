@@ -13,4 +13,4 @@
   report   控制台表格 / CSV / JSON 输出
 """
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"

@@ -33,7 +33,7 @@ from typing import Any, Dict, Optional
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from sla_tool import __version__, dataset, report, sla_spec  # noqa: E402
+from sla_tool import __version__, console, dataset, report, sla_spec  # noqa: E402
 from sla_tool.config import Config  # noqa: E402
 from sla_tool.search import SlaSearch  # noqa: E402
 
@@ -146,13 +146,25 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=__doc__)
     parser.add_argument("--config", help="JSON 配置文件（CLI 参数优先级更高）")
     parser.add_argument("--verbose", action="store_true", help="输出调试日志")
+    parser.add_argument("--color", choices=("auto", "always", "never"), default="auto",
+                        help="终端颜色（默认 auto：仅在 TTY 上启用；日志文件始终纯文本）")
+    parser.add_argument("--no-color", action="store_true", default=None,
+                        help="等价 --color never")
     parser.add_argument("--version", action="version", version=f"aisbench-sla {__version__}")
-    # 子命令也要能接收 --verbose / --config（argparse 不继承父解析器选项）
+    # 子命令也要能接收 --verbose / --config / --color（argparse 不继承父解析器选项）。
+    # default=SUPPRESS：放在子命令之前的同名参数不会被这里的默认值覆盖。
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--verbose", action="store_true", help="输出调试日志")
-    common.add_argument("--no-stream", action="store_true", default=None,
+    common.add_argument("--verbose", action="store_true", default=argparse.SUPPRESS,
+                        help="输出调试日志")
+    common.add_argument("--no-stream", action="store_true", default=argparse.SUPPRESS,
                         help="不把 ais_bench 输出实时打到终端（仍写入 points/c<N>/*.log）")
-    common.add_argument("--config", help="JSON 配置文件（CLI 参数优先级更高）")
+    common.add_argument("--config", default=argparse.SUPPRESS,
+                        help="JSON 配置文件（CLI 参数优先级更高）")
+    common.add_argument("--color", choices=("auto", "always", "never"),
+                        default=argparse.SUPPRESS,
+                        help="终端颜色（auto 仅在 TTY 上启用）")
+    common.add_argument("--no-color", action="store_true", default=argparse.SUPPRESS,
+                        help="等价 --color never")
     sub = parser.add_subparsers(dest="command", required=True)
 
     search = sub.add_parser("search", help="自动搜索 SLA 内最大并发",
@@ -216,14 +228,18 @@ def namespace_to_config(args: argparse.Namespace) -> Config:
     return cfg
 
 
-def setup_logging(verbose: bool) -> None:
+def setup_logging(verbose: bool, color_mode: str = "auto") -> None:
     try:  # Windows 控制台默认 GBK，保证中文/符号不炸
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     except Exception:  # noqa: BLE001
         pass
-    logging.basicConfig(level=logging.DEBUG if verbose else logging.INFO,
-                        format=LOG_FORMAT)
+    console.init_color(color_mode)
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(console.ConsoleFormatter(LOG_FORMAT))
+    root = logging.getLogger()
+    root.handlers[:] = [handler]           # 终端日志着色；文件处理器由 logs.py 挂载（纯文本）
+    root.setLevel(logging.DEBUG if verbose else logging.INFO)
 
 
 # --------------------------------------------------------------------- 子命令
@@ -282,7 +298,8 @@ def cmd_dataset(cfg: Config) -> int:
 def main(argv: Optional[list] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    setup_logging(getattr(args, "verbose", False))
+    setup_logging(getattr(args, "verbose", False),
+                  "never" if getattr(args, "no_color", None) else getattr(args, "color", "auto"))
     try:
         cfg = namespace_to_config(args)
     except ValueError as exc:

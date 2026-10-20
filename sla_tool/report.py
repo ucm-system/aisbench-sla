@@ -7,7 +7,7 @@ import os
 import time
 from typing import Dict, Iterable, List
 
-from . import __version__
+from . import __version__, console
 from .search import ALL_METRIC_KEYS, PointResult, SearchResult, dry_run_points
 
 
@@ -43,14 +43,16 @@ def point_line(point: PointResult, cfg=None) -> str:
     else:
         gated = [f"TTFT P90 {_num(point.metrics.get('ttft_p90_ms'))}",
                  f"TPOT P90 {_num(point.metrics.get('tpot_p90_ms'), 1)}"]
+    mark = console.verdict(point.ok, "PASS" if point.ok else "FAIL")
+    reason = point.reason if point.ok else console.c(point.reason, console.YELLOW)
     return ("  {mark} c={c:<4} {gated}  out {tput:>8} tok/s  HBM {hbm}  ext {ext}  {reason}").format(
-        mark="PASS" if point.ok else "FAIL",
+        mark=mark,
         c=point.concurrency,
         gated="  ".join(gated),
         tput=_num(point.metrics.get("output_token_throughput"), 1),
         hbm=_pct(hit.get("hbm_hit_rate")),
         ext=_pct(hit.get("ext_hit_rate")),
-        reason=point.reason,
+        reason=reason,
     )
 
 
@@ -78,15 +80,18 @@ def print_table(points: Iterable[PointResult], cfg=None) -> None:
             _num(point.elapsed_s, 1),
         ]
         rows.append(row)
-    width = max(118, 11 * len(headers))
-    print("\n" + "=" * width)
-    print("探测结果明细")
-    print("=" * width)
-    print("".join(f"{h:<11}" for h in headers))
-    print("-" * width)
+    width = max(118, 13 * len(headers))
+    console.rule("探测结果明细", char="=", width=width, codes=(console.BOLD, console.BLUE))
+    print(console.c("".join(console.pad(h, 13) for h in headers), console.BOLD))
+    print(console.c("-" * width, console.DIM))
     for row in rows:
-        print("".join(f"{cell:<11}" for cell in row))
-    print("=" * width)
+        line = "".join(console.pad(cell, 13) for cell in row)
+        if row[1] == "PASS":
+            line = line.replace("PASS", console.verdict(True, "PASS"), 1)
+        elif row[1] == "FAIL":
+            line = line.replace("FAIL", console.verdict(False, "FAIL"), 1)
+        print(line)
+    print(console.c("=" * width, console.BOLD))
 
 
 def throughput_summary(points: Iterable[PointResult]) -> Dict[str, object]:
@@ -119,10 +124,12 @@ def throughput_summary(points: Iterable[PointResult]) -> Dict[str, object]:
 
 def print_summary(result: SearchResult, cfg) -> None:
     print()
-    width = 118
-    print("=" * width)
+    ok = result.exit_code == 0
+    title = "结论" + ("（找到可用并发）" if ok else "（未找到可用并发）")
+    console.banner(title, char="=", codes=((console.BOLD, console.GREEN) if ok
+                                          else (console.BOLD, console.YELLOW)))
     if result.error:
-        print(f"错误：{result.error}")
+        print(console.c(f"错误：{result.error}", console.BOLD, console.RED))
     print(f"结论：{result.note}")
     if cfg is not None and cfg.sla:
         print("  判定口径：" + "；".join(rule.label() for rule in cfg.sla_rules()))
@@ -139,10 +146,11 @@ def print_summary(result: SearchResult, cfg) -> None:
         print(f"  SLA 内最高吞吐：{best_ok['value']:.1f} tok/s @ 并发={best_ok['concurrency']}")
     print(f"  状态：{result.status}（退出码 {result.exit_code}）")
     for warning in result.warnings:
-        print(f"  注意：{warning}")
+        print(console.c(f"  注意：{warning}", console.YELLOW))
     if result.dataset_info:
         print(f"  数据集：{result.dataset_info.get('dataset_path', '')}")
-    print("=" * 118)
+    console.rule(char="=", codes=((console.BOLD, console.GREEN) if ok
+                                  else (console.BOLD, console.YELLOW)))
 
 
 def print_dry_run(cfg) -> None:

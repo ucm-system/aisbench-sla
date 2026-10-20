@@ -22,6 +22,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Dict, Optional
 
+from . import console
+
 logger = logging.getLogger(__name__)
 
 MODEL_CFG_NAME = "vllm_api_chat_temp"
@@ -206,13 +208,16 @@ def run_command(command: str, log_path: str, cwd: str, timeout: float = 0.0,
             def _tee() -> None:
                 # 必须持续读管道：既是为了实时打印，也避免写满管道把子进程卡死
                 for line in proc.stdout:  # type: ignore[union-attr]
-                    log_file.write(line)
+                    # ais_bench 自带颜色且无条件上色（ColoredLevelFormatter）：
+                    # 终端保留颜色，日志文件剥掉 ANSI，保持纯文本可 grep
+                    clean = console.strip_ansi(line)
+                    log_file.write(clean)
                     log_file.flush()
                     if all_handle is not None:
-                        all_handle.write(line)
+                        all_handle.write(clean)
                         all_handle.flush()
                     if stream:
-                        sys.stdout.write(line)
+                        sys.stdout.write(line if console.color_enabled() else clean)
                         sys.stdout.flush()
 
             reader = threading.Thread(target=_tee, daemon=True, name="aisbench-tee")
