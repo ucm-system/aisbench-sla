@@ -5,7 +5,7 @@
 ## 1. aisbench_auto_tools_prefix
 
 - 来源：<https://github.com/rayn-zzz/aisbench_auto_tools_prefix>
-- 许可：MIT License（原许可全文：`LICENSE.ref`）
+- 许可：MIT License（原许可全文：`third_party/LICENSE.aisbench_auto_tools_prefix`）
 - 收录范围（移植/改写）：
   - 前缀缓存数据集生成 —— `generate_dataset.py` / `data_picker.py` → `sla_tool/dataset.py`
   - ais_bench 模型配置模板 —— `default_api.py` → `sla_tool/aisbench.py`
