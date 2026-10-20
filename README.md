@@ -45,6 +45,58 @@ python3 sla_search.py dataset \
 
 `--help` / `python3 sla_search.py search --help` 查看全部参数。
 
+## 示例：64K 输入 / 1K 输出 / 90% 命中 —— 找最大并发与最高吞吐
+
+场景：长上下文（**输入 65536 token**）+ **输出 1024 token**，前缀重复率 **90%**，
+SLA 为 **TTFT P90 < 30s** 且 **TPOT P90 < 40ms**；目标是给出满足 SLA 的
+**最大并发**与**最高输出吞吐**。
+
+```bash
+python3 sla_search.py search \
+    --target 192.168.1.10:8000 \
+    --model my-model --model-path /home/weights/my-model \
+    --work-path /home/benchmark --dataset-path /home/dataset \
+    --input-len 65536 --output-len 1024 --data-num 24 \
+    --dataset-type prefix_cache --prefix-num 1 --repeat-rate 90% --seed 1 --dp 1 \
+    --ttft-p90 30000 --tpot-p90 40 \
+    --start 1 --max 64 --max-probes 12 --point-timeout 1800 \
+    --output-dir ./sla_out_64k
+```
+
+长上下文场景的四个注意点：
+
+1. **`--data-num` 要不小于计划探测的最大并发**（示例 24 条，配 `--max 64` 建议 2~4 倍于上限），
+   否则单点请求数不够、`measured_concurrency` 压不满，吞吐会被低估；
+2. **单点很慢**：每点 = 前缀预热 + 全量两阶段，64K×1K 的输出按秒计；用 `--point-timeout 1800`
+   兜底、`--max-probes` 控预算，赶时间可加 `--prefix-warmup once`（只在首次预热前缀）；
+3. **`--max` 要给足**：上限内一直达标时结论会提示「可提高 --max 继续探测」（退出码 0），
+   这时把 `--max` 加倍重跑即可，数据集与命中率口径不变；
+4. 变长输入（如 8k~128k 不定长、均值 32k）追加 `--length-mean 32768 --length-std 49152
+   --length-min 8192 --length-max 131072`，工具按同分布生成并逐条截断。
+
+**实测读数示例**（本轮用官方 ais_bench 镜像 + 本地 mock 服务跑通 65536/1024/90%，
+mock 延迟恒定故各点全达标；真实 NPU 上会出现拐点，读数方式相同）：
+
+```
+  PASS c=1    TTFT P90      500  TPOT P90     0.1  out   1893.9 tok/s  HBM 89.51%  SLA 满足
+  PASS c=2    TTFT P90      495  TPOT P90     0.1  out   3708.9 tok/s  HBM 100.00%  SLA 满足
+  PASS c=4    TTFT P90      517  TPOT P90     0.4  out   3678.5 tok/s  HBM 100.00%  SLA 满足
+  PASS c=8    TTFT P90      499  TPOT P90     0.3  out   7971.2 tok/s  HBM 100.00%  SLA 满足
+
+结论：并发达上限 8 仍满足 SLA，可提高 --max 继续探测
+  SLA 内最大并发：8
+  最高输出吞吐：7971.2 tok/s @ 并发=8（达标：TTFT P90 499ms，TPOT P90 0.3ms）
+  状态：max_unbounded（退出码 0）
+```
+
+结果怎么读：
+
+- **最大并发** → 结论里的「SLA 内最大并发」，即 `sla_summary.json` 的 `max_ok_concurrency`
+- **最高吞吐** → 「最高输出吞吐」，即 `throughput.peak`（含所在并发与是否达标）；
+  若它本身达标，还会给出 `throughput.best_within_sla`
+- **逐点曲线** → `sla_points.csv`：并发、判定、TTFT/TPOT 的 avg 与 P90、输出吞吐、QPS、
+  HBM/ext 命中率、预热命中率、实测并发、峰值在途、耗时、日志路径
+
 ## 它做了什么
 
 每个探测点都是一次真实的「前缀预热 + 全量压测」两阶段运行（与参考工具一致）：

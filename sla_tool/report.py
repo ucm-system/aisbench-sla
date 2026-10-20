@@ -74,12 +74,50 @@ def print_table(points: Iterable[PointResult]) -> None:
     print("=" * 118)
 
 
+def throughput_summary(points: Iterable[PointResult]) -> Dict[str, object]:
+    """挑出「最高输出吞吐」与「达标点里的最高吞吐」。
+
+    需求场景是「找最大并发 + 最高吞吐」，二者可能不在同一个点：
+    吞吐通常随并发单调上升，但越过 SLA 后的点不再可用，故分开报告。
+    """
+    probes = [p for p in points if p.kind != "warmup"]
+    peak = best_ok = None
+    for point in probes:
+        value = point.metrics.get("output_token_throughput", -1)
+        if value is None or value < 0:
+            continue
+        record = {"value": float(value), "concurrency": point.concurrency,
+                  "ok": bool(point.ok),
+                  "ttft_p90_ms": point.metrics.get("ttft_p90_ms", -1),
+                  "tpot_p90_ms": point.metrics.get("tpot_p90_ms", -1)}
+        if peak is None or record["value"] > peak["value"]:
+            peak = record
+        if point.ok and (best_ok is None or record["value"] > best_ok["value"]):
+            best_ok = record
+    summary: Dict[str, object] = {}
+    if peak:
+        summary["peak"] = peak
+    if best_ok:
+        summary["best_within_sla"] = best_ok
+    return summary
+
+
 def print_summary(result: SearchResult, cfg) -> None:
     print()
     print("=" * 118)
     print(f"结论：{result.note}")
     if result.max_ok is not None:
         print(f"  SLA 内最大并发：{result.max_ok}")
+    throughput = throughput_summary(result.points)
+    peak = throughput.get("peak") or {}
+    best_ok = throughput.get("best_within_sla") or {}
+    if peak:
+        flag = "达标" if peak.get("ok") else "不达标"
+        print(f"  最高输出吞吐：{peak['value']:.1f} tok/s @ 并发={peak['concurrency']}"
+              f"（{flag}：TTFT P90 {_num(peak.get('ttft_p90_ms'))}ms，"
+              f"TPOT P90 {_num(peak.get('tpot_p90_ms'), 1)}ms）")
+    if best_ok and (not peak or best_ok["concurrency"] != peak["concurrency"]):
+        print(f"  SLA 内最高吞吐：{best_ok['value']:.1f} tok/s @ 并发={best_ok['concurrency']}")
     print(f"  状态：{result.status}（退出码 {result.exit_code}）")
     if result.dataset_info:
         print(f"  数据集：{result.dataset_info.get('dataset_path', '')}")
@@ -154,6 +192,7 @@ def write_summary(out_dir: str, cfg, result: SearchResult) -> str:
                      "dataset_type": cfg.dataset_type},
         "dataset": result.dataset_info,
         "duration_s": round(result.finished_at - result.started_at, 1),
+        "throughput": throughput_summary(result.points),
         "points": [point.as_row() for point in result.points],
     }
     with open(path, "w", encoding="utf-8") as handle:
