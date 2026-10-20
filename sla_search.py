@@ -94,8 +94,11 @@ def add_env_opts(parser: argparse.ArgumentParser) -> None:
                             "需 VLLM_SERVER_DEV_MODE=1 才存在；且只清显存侧缓存，"
                             "测外部缓存(UCM)命中时无效。各点可比性请优先用 --seed-per-point")
     group.add_argument("--seed-per-point", action="store_true", default=None,
-                       help="【推荐】每个探测点用 seed+i 重新生成数据集：各点前缀都是新的，"
-                            "HBM 与外部缓存都从干净状态起测，命中率各点可比（代价：每点重生成数据集）")
+                       help="【默认开启】每个探测点用 seed+i 生成独立数据集：各点前缀都是新的，"
+                            "HBM 与外部缓存都从干净状态起测，命中率各点可比")
+    group.add_argument("--no-seed-per-point", action="store_true", default=None,
+                       help="关闭默认行为：各探测点复用同一份数据集（省去逐点重生成，"
+                            "适合长上下文；代价是后续点命中率会逐点饱和到 ~100%、各点不可比）")
     group.add_argument("--dry-run", action="store_true", default=None,
                        help="只打印计划，不真正压测")
 
@@ -162,6 +165,8 @@ def namespace_to_config(args: argparse.Namespace) -> Config:
         target = key
         if key == "no_num_warmups":
             target, value = "num_warmups", False
+        if key == "no_seed_per_point":
+            target, value = "seed_per_point", False
         if key == "pods":
             value = [item.strip() for item in str(value).split(",") if item.strip()]
         if target in known:

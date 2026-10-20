@@ -181,19 +181,19 @@ class SlaSearch:
         saturated = sum(1 for _, r in rates if r >= 0.99)
         if saturated >= 2 and last_rate - first_rate > 0.05:
             if self.cfg.seed_per_point:
-                fix = ("当前已开 --seed-per-point，仍出现饱和说明各点前缀仍被复用，"
-                       "请检查数据集是否被沿用")
+                fix = ("已开每点换 seed 仍出现饱和，说明各点前缀仍被复用"
+                       "（请检查数据集是否被沿用）")
             elif self.cfg.reset_cache:
-                fix = ("--seed-per-point（服务若未开调试模式 VLLM_SERVER_DEV_MODE=1，"
-                       "/reset_prefix_cache 不生效；且该端点只清显存，外部缓存命中不受影响）")
+                fix = ("去掉 --no-seed-per-point，恢复默认的每点换 seed；"
+                       "注意 /reset_prefix_cache 是调试接口且只清显存侧缓存，"
+                       "外部缓存命中不受影响")
             else:
-                fix = ("--seed-per-point（推荐：每点换前缀，不依赖服务支持，"
-                       "HBM 与外部缓存都从「该前缀从未出现过」起测；"
-                       "代价是每点重生成数据集）")
+                fix = ("去掉 --no-seed-per-point，恢复默认的每点换 seed"
+                       "（不依赖服务支持，HBM 与外部缓存都从「该前缀从未出现过」起测）")
             result.warnings.append(
                 f"命中率逐点上升并趋近 100%（首点 {first_rate:.1%} → 末点 {last_rate:.1%}，"
                 f"{saturated}/{len(rates)} 个点 ≥99%）：缓存未在探测点之间复位，"
-                f"各点的缓存状态不同、命中率不可直接比较。建议加 {fix}。")
+                f"各点的缓存状态不同、命中率不可直接比较。建议：{fix}。")
 
     # ---------------------------------------------------------------- 准备
     def _prepare(self) -> None:
@@ -215,16 +215,21 @@ class SlaSearch:
         metrics.wait_for_run_metrics(cfg.metrics_pods(), timeout=15.0)
 
     def _check_hit_rate_regime(self) -> None:
-        """开跑前提示命中率的可比性风险（与其事后看告警，不如事前说清）。"""
+        """开跑前提示命中率的可比性风险（默认每点换 seed，故仅在被显式关闭时提示）。"""
         cfg = self.cfg
-        if cfg.dataset_type != "prefix_cache" or cfg.seed_per_point or cfg.reset_cache:
+        if cfg.dataset_type != "prefix_cache" or cfg.seed_per_point:
+            return
+        if cfg.reset_cache:
+            self.on_event(
+                "提示：已关闭每点独立数据集（--no-seed-per-point）并启用 --reset-cache。"
+                "注意 vLLM 的 /reset_prefix_cache 是调试接口（需 VLLM_SERVER_DEV_MODE=1）且"
+                "只清显存侧缓存——测外部缓存(UCM)命中时它无效，此类场景请去掉 "
+                "--no-seed-per-point，改用默认的每点换 seed。")
             return
         self.on_event(
-            "提示：各探测点复用同一份数据集且未复位缓存 —— 第 1 点是冷缓存，后续点会因缓存"
-            "累积命中率逐点饱和到 ~100%，各点不可比。建议加 --seed-per-point"
-            "（推荐：每点换前缀，通用且不依赖服务，HBM 与外部缓存都从干净状态起测）；"
-            "--reset-cache 只在服务开了调试模式（vLLM 需 VLLM_SERVER_DEV_MODE=1）且只关心"
-            "显存缓存时才有用。")
+            "提示：已关闭每点独立数据集（--no-seed-per-point），各点复用同一份数据集且未复位"
+            "缓存 —— 第 1 点是冷缓存，后续点命中率会逐点饱和到 ~100%，各点不可比。"
+            "去掉该参数即可恢复默认的「每点换 seed」（通用、不依赖服务）。")
 
     def _check_target_host(self) -> None:
         """报告最终寻址方式，并提醒 ais_bench 的 host_ip 校验限制。
@@ -290,24 +295,9 @@ class SlaSearch:
         if not cfg.seed_per_point:
             return self.prefix_path, self.dataset_path, cfg.seed
         save_path = os.path.join(cfg.output_dir, "datasets", f"seed{seed}")
-        prefix_path, dataset_path = dataset.create_multi_prefix_dataset(
-            tokenizer_path=cfg.model_path,
-            input_len=cfg.input_len,
-            number=cfg.data_num,
-            save_path=save_path,
-            prefix_flag=1 if cfg.dataset_type == "prefix_cache" else 0,
-            dp=cfg.dp,
-            repeat_rate=cfg.repeat_rate,
-            seed=seed,
-            prefix_num=cfg.prefix_num,
-            length_mean=cfg.length_mean,
-            length_std=cfg.length_std,
-            length_min=cfg.length_min,
-            length_max=cfg.length_max,
-            gsm8k_source=cfg.gsm8k_source,
-        )
-        self.on_event(f"[c={concurrency}] --seed-per-point：用 seed={seed} 生成独立数据集"
-                      f"（前缀对缓存是新的，各点命中率可比）")
+        prefix_path, dataset_path = dataset.ensure_seed_dataset(cfg, seed, save_path)
+        self.on_event(f"[c={concurrency}] 每点独立数据集：seed={seed}"
+                      "（各点前缀对缓存都是新的，命中率可比）")
         return prefix_path, dataset_path, seed
 
     def _probe(self, concurrency: int, kind: str = "probe") -> PointResult:

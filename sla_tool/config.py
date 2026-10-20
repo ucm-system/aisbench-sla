@@ -92,8 +92,8 @@ class Config:
     num_warmups: bool = True           # 是否附加 --num-warmups 0（老版本不支持时自动回退）
     point_timeout: float = 0.0         # 单点超时（秒），0 = 不限
     prefix_warmup: str = "per-point"   # none | once | per-point
-    reset_cache: bool = False          # 每点前 POST /reset_prefix_cache
-    seed_per_point: bool = False       # 每个探测点用 seed+i 重新生成数据集（前缀不复用）
+    reset_cache: bool = False          # 每点前 POST /reset_prefix_cache（vLLM 调试接口）
+    seed_per_point: bool = True        # 默认：每点用 seed+i 生成独立数据集（保证命中率各点可比）
     dry_run: bool = False
     verbose: bool = False
 

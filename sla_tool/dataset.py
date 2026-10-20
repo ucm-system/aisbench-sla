@@ -400,6 +400,37 @@ def ensure_dataset(cfg) -> Tuple[str, str]:
     return prefix_path, dataset_path
 
 
+def ensure_seed_dataset(cfg, seed: int, save_path: str) -> Tuple[str, str]:
+    """seed 专属数据集（每个探测点一份）：带签名缓存，重复运行可复用、不必重生成。"""
+    cache_file = os.path.join(save_path, ".dataset_cache.json")
+    signature = f"{cfg.workload_signature()}|seed={seed}"
+    cached = _read_cache(cache_file)
+    if (cached.get("signature") == signature and cached.get("dataset_path")
+            and os.path.isfile(cached["dataset_path"])):
+        logger.info("复用 seed=%s 的数据集：%s", seed, cached["dataset_path"])
+        return cached.get("prefix_path", ""), cached["dataset_path"]
+
+    prefix_path, dataset_path = create_multi_prefix_dataset(
+        tokenizer_path=cfg.model_path,
+        input_len=cfg.input_len,
+        number=cfg.data_num,
+        save_path=save_path,
+        prefix_flag=1 if cfg.dataset_type == "prefix_cache" else 0,
+        dp=cfg.dp,
+        repeat_rate=cfg.repeat_rate,
+        seed=seed,
+        prefix_num=cfg.prefix_num,
+        length_mean=cfg.length_mean,
+        length_std=cfg.length_std,
+        length_min=cfg.length_min,
+        length_max=cfg.length_max,
+        gsm8k_source=cfg.gsm8k_source,
+    )
+    _write_cache(cache_file, {"signature": signature, "prefix_path": prefix_path,
+                              "dataset_path": dataset_path})
+    return prefix_path, dataset_path
+
+
 def _read_cache(path: str) -> dict:
     try:
         with open(path, "r", encoding="utf-8") as handle:

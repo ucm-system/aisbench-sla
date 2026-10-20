@@ -108,8 +108,8 @@ def build_command(args) -> list[str]:
     ]
     if args.reset_cache:
         common.append("--reset-cache")
-    if args.seed_per_point:
-        common.append("--seed-per-point")
+    if args.reuse_dataset:
+        common.append("--no-seed-per-point")
     if args.no_docker:
         work = str(Path(out, "work").resolve())
         os.makedirs(work, exist_ok=True)
@@ -242,12 +242,17 @@ def main() -> int:
     parser.add_argument("--reset-cache", action="store_true",
                         help="透传 --reset-cache：每点前 POST /reset_prefix_cache")
     parser.add_argument("--seed-per-point", action="store_true",
-                        help="透传 --seed-per-point：每点换 seed 生成独立数据集")
-    parser.add_argument("--assert-no-saturation", action="store_true",
-                        help="断言各点命中率未饱和（<99%）且无「不可比」告警，"
-                             "配合 --reset-cache / --seed-per-point 使用")
+                        help="（现在已是默认行为，显式传入仅作声明）")
+    parser.add_argument("--reuse-dataset", action="store_true",
+                        help="透传 --no-seed-per-point：各点复用同一数据集（旧行为，命中率会饱和）")
+    parser.add_argument("--assert-no-saturation", action="store_true", default=None,
+                        help="断言各点命中率未饱和（<99%）且无「不可比」告警；"
+                             "默认在未用 --reuse-dataset 时开启")
     parser.add_argument("--keep", action="store_true", help="保留 mock 进程与输出目录")
     args = parser.parse_args()
+    if args.assert_no_saturation is None:
+        # 默认（每点换 seed）本就应当不饱和；显式复用数据集时才需要另开断言
+        args.assert_no_saturation = not args.reuse_dataset
     if args.no_docker:
         # 桩内置确定性 SLA 模型：ttft_p90 = 100 + 20c、tpot_p90 = 10 + 0.5c
         # 阈值 340 -> c<=12 通过、c=16 起失败，二分收敛到 12
